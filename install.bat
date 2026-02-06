@@ -1,5 +1,5 @@
 @echo off
-REM Copyright (c) 2025 Ashutosh Sharma. All rights reserved.
+REM Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
 
 echo Installing AS Lang...
 

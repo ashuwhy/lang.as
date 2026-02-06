@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Ashutosh Sharma. All rights reserved.
+// Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
 
 #include <immintrin.h>
 #include "../include/simd_ops.h"

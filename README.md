@@ -29,6 +29,7 @@ A high-performance multi-language programming language that combines the power o
 ## Setup
 
 1. Install dependencies:
+
    ```bash
    # Python dependencies
    pip install -r requirements.txt
@@ -41,6 +42,7 @@ A high-performance multi-language programming language that combines the power o
    ```
 
 2. Build the project:
+
    ```bash
    python setup.py install
    ```
@@ -60,6 +62,6 @@ Please read our [Contributing Guidelines](docs/CONTRIBUTING.md) before submittin
 
 ## License
 
-MIT License - Copyright (c) 2025 Ashutosh Sharma. All rights reserved.
+MIT License - Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
 
 See [LICENSE](LICENSE) file for details.

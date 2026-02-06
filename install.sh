@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2025 Ashutosh Sharma. All rights reserved.
+# Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
 
 set -e  # Exit on error
 

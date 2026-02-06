@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2025 Ashutosh Sharma. All rights reserved.
+# Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
 
 from sys import argv
 from setuptools import setup, find_packages

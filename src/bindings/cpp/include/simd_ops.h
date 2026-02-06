@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Ashutosh Sharma. All rights reserved.
+// Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
 
 #ifndef ASLANG_SIMD_OPS_H
 #define ASLANG_SIMD_OPS_H

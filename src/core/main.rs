@@ -2,9 +2,7 @@ use std::env;
 use std::fs;
 use std::process;
 
-mod compiler;
-mod runtime;
-mod parser;
+use aslang::runtime;
 
 const VERSION: &str = "0.1.0";
 const AUTHOR: &str = "Ashutosh Sharma <ashutoshsharmawhy@gmail.com>";

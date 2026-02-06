@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Ashutosh Sharma <ashutoshsharmawhy@gmail.com>"]
 description = "A high-performance multi-language programming language"
 license = "MIT"
-copyright = "© 2025 Ashutosh Sharma"
+copyright = "© 2026 Ashutosh Sharma"
 
 [dependencies]
 clap = { version = "3.0", features = ["derive"] }
