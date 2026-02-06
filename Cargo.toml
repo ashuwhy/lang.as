@@ -17,6 +17,8 @@ rayon = "1.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ndarray = "0.15"
+rustyline = "17.0.2"
+lsp-server = "0.7.9"
 
 [build-dependencies]
 cc = "1.0"

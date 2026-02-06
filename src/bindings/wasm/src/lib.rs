@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Ashutosh Sharma. All rights reserved.
+// Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
 
 use wasm_bindgen::prelude::*;
 use serde::{Serialize, Deserialize};

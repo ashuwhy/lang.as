@@ -44,6 +44,7 @@ pub struct Runtime {
     resolver: Resolver,
     stack: Vec<Value>,
     variables: HashMap<String, Value>,
+    pub debug: bool,
 }
 
 impl Runtime {
@@ -54,6 +55,7 @@ impl Runtime {
             resolver: Resolver::new(),
             stack: Vec::new(),
             variables: HashMap::new(),
+            debug: false,
         }
     }
 
@@ -74,6 +76,9 @@ impl Runtime {
         
         while pc < bytecode.len() {
             let opcode = &bytecode[pc];
+            if self.debug {
+                println!("[DEBUG] PC: {:04} | Op: {:?} | Stack: {:?}", pc, opcode, self.stack);
+            }
             pc += 1;
             
             match opcode {
