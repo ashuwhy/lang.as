@@ -12,7 +12,7 @@ pub enum Token {
     
     // Keywords
     Let, Fn, If, Else, ElseIf, While, For, Do, 
-    Break, Continue, Return, Output, Input,
+    Break, Continue, Return, Output, Input, Import,
     
     // Operators
     Plus, Minus, Star, Slash, Percent, Caret,
@@ -268,6 +268,7 @@ impl<'a> Lexer<'a> {
             "return" => Token::Return,
             "output" => Token::Output,
             "input" => Token::Input,
+            "import" => Token::Import,
             "true" => Token::Boolean(true),
             "false" => Token::Boolean(false),
             _ => Token::Identifier(value),

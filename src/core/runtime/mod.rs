@@ -2,6 +2,7 @@
 
 use crate::compiler::{Compiler, Opcode};
 use crate::parser::Parser;
+use crate::types::TypeChecker;
 use crate::error::{ASError, ErrorKind, SourceLocation};
 use std::collections::HashMap;
 
@@ -35,8 +36,12 @@ impl std::fmt::Display for Value {
     }
 }
 
+use crate::resolver::Resolver;
+
 pub struct Runtime {
     compiler: Compiler,
+    type_checker: TypeChecker,
+    resolver: Resolver,
     stack: Vec<Value>,
     variables: HashMap<String, Value>,
 }
@@ -45,6 +50,8 @@ impl Runtime {
     pub fn new() -> Self {
         Runtime {
             compiler: Compiler::new(),
+            type_checker: TypeChecker::new(),
+            resolver: Resolver::new(),
             stack: Vec::new(),
             variables: HashMap::new(),
         }
@@ -52,6 +59,10 @@ impl Runtime {
 
     pub fn execute(&mut self, input: &str) -> Result<String, ASError> {
         let ast = Parser::parse(input)?;
+        
+        // Type check before compilation
+        self.type_checker.check(&ast)?;
+        
         let bytecode = self.compiler.compile(&ast)?;
         
         self.execute_bytecode(&bytecode)
@@ -91,6 +102,33 @@ impl Runtime {
                     let mut input = String::new();
                     std::io::stdin().read_line(&mut input).unwrap(); // Handle error properly in real code
                     self.stack.push(Value::String(input.trim().to_string()));
+                },
+                Opcode::Import(path) => {
+                    // 1. Resolve path
+                    let resolved_path = self.resolver.resolve(path, None).map_err(|e| self.error(&format!("Import failed: {}", e)))?;
+                    
+                    // 2. Read file
+                    let source = self.resolver.read_file(&resolved_path).map_err(|e| self.error(&format!("Could not read file: {}", e)))?;
+                    
+                    // 3. Parse
+                    let ast = Parser::parse(&source)?;
+                    
+                    // 4. Type Check (optional for now but good practice)
+                    // self.type_checker.check(&ast)?;
+
+                    // 5. Compile
+                    // Create a new compiler instance to avoid messing up current bytecode offsets
+                    // or append? For simplicity, we execute recursively.
+                    let mut compiler = Compiler::new();
+                    let bytecode = compiler.compile(&ast)?;
+                    
+                    // 6. Execute (recursively)
+                    // Save PC and bytecode? No, we are in a loop.
+                    // Best way is to just call execute_bytecode recursively
+                    self.execute_bytecode(&bytecode)?;
+                    
+                    // Note: Variables defined in imported file will be in self.variables
+                    // effectively acting as a global include.
                 },
                 Opcode::Pop => {
                     self.pop()?;

@@ -5,6 +5,8 @@ pub mod parser;
 pub mod runtime;
 pub mod error;
 pub mod lexer;
+pub mod types;
+pub mod resolver;
 
 pub use compiler::*;
 pub use parser::*;

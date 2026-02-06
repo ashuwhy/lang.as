@@ -46,10 +46,27 @@ impl ASError {
 
 impl std::fmt::Display for ASError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{:?} at line {}, column {}: {}",
-            self.kind, self.location.line, self.location.column, self.message
-        )
+        let kind_str = match self.kind {
+            ErrorKind::SyntaxError => "Syntax Error",
+            ErrorKind::TypeError => "Type Error",
+            ErrorKind::RuntimeError => "Runtime Error",
+            ErrorKind::UndefinedVariable => "Undefined Variable",
+            ErrorKind::UndefinedFunction => "Undefined Function",
+            ErrorKind::IOError => "I/O Error",
+        };
+        
+        if self.location.line > 0 {
+            if let Some(ref file) = self.location.file {
+                write!(f, "{}:{}:{}: {}: {}", 
+                    file, self.location.line, self.location.column, 
+                    kind_str, self.message)
+            } else {
+                write!(f, "[{}:{}] {}: {}", 
+                    self.location.line, self.location.column, 
+                    kind_str, self.message)
+            }
+        } else {
+            write!(f, "{}: {}", kind_str, self.message)
+        }
     }
 }

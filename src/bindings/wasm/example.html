@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AS Lang WASM Demo</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        h1 { color: #333; }
+        textarea { width: 100%; height: 150px; font-family: monospace; padding: 10px; }
+        button { background: #4CAF50; color: white; padding: 10px 20px; border: none; cursor: pointer; margin: 10px 0; }
+        button:hover { background: #45a049; }
+        #output { background: #f4f4f4; padding: 15px; border-radius: 5px; white-space: pre-wrap; font-family: monospace; }
+        .error { color: #d32f2f; }
+    </style>
+</head>
+<body>
+    <h1>🚀 AS Lang WASM Demo</h1>
+    <p>Write AS Lang code below and click Run to execute it in the browser via WebAssembly.</p>
+    
+    <textarea id="code">// Try AS Lang in the browser!
+let x: Number = 10;
+let y: Number = 20;
+output x + y;
+
+if x < y {
+    output "x is smaller";
+}
+
+output "Hello from WASM!";</textarea>
+    
+    <button onclick="runCode()">▶ Run Code</button>
+    
+    <h3>Output:</h3>
+    <div id="output">Click "Run Code" to see output...</div>
+    
+    <script type="module">
+        import init, { run, WasmRuntime } from './pkg/aslang_wasm.js';
+        
+        let runtime = null;
+        
+        async function initialize() {
+            await init();
+            runtime = new WasmRuntime();
+            console.log('AS Lang WASM initialized!');
+        }
+        
+        window.runCode = async function() {
+            if (!runtime) {
+                await initialize();
+            }
+            
+            const code = document.getElementById('code').value;
+            const outputDiv = document.getElementById('output');
+            
+            try {
+                const result = runtime.execute(code);
+                outputDiv.innerHTML = result || '(no output)';
+                outputDiv.classList.remove('error');
+            } catch (e) {
+                outputDiv.innerHTML = '<span class="error">Error: ' + e + '</span>';
+                outputDiv.classList.add('error');
+            }
+        };
+        
+        // Initialize on page load
+        initialize();
+    </script>
+</body>
+</html>

@@ -18,6 +18,7 @@ pub enum Opcode {
     Return,
     Output,
     Input,
+    Import(String),
     
     // Arithmetic
     Add, Subtract, Multiply, Divide, Modulo, Power,
@@ -66,7 +67,7 @@ impl Compiler {
 
     fn compile_statement(&mut self, statement: &Statement) -> Result<(), ASError> {
         match statement {
-            Statement::Let { name, value } => {
+            Statement::Let { name, value, type_annotation: _ } => {
                 self.compile_expression(value)?;
                 self.bytecode.push(Opcode::StoreVar(name.clone()));
                 self.variables.insert(name.clone(), self.variables.len());
@@ -84,11 +85,14 @@ impl Compiler {
                 self.bytecode.push(Opcode::StoreVar(target.clone()));
                 self.variables.insert(target.clone(), self.variables.len());
             }
+            Statement::Import { path } => {
+                self.bytecode.push(Opcode::Import(path.clone()));
+            }
             Statement::ExpressionStmt(expr) => {
                 self.compile_expression(expr)?;
                 self.bytecode.push(Opcode::Pop);
             }
-            Statement::Function { name, params, body } => {
+            Statement::Function { name, params, body, return_type: _ } => {
                 // ToDo: Function compilation needs jump over body or separate code segments
                 // For simplicity now, we'll put it in main stream but need a jump over it
                 // A better approach is to compile functions separately

@@ -49,6 +49,7 @@ pub enum Statement {
     Let {
         name: String,
         value: Expression,
+        type_annotation: Option<crate::types::Type>,
     },
     Output(Expression),
     Input {
@@ -59,6 +60,7 @@ pub enum Statement {
         name: String,
         params: Vec<String>,
         body: Vec<Statement>,
+        return_type: Option<crate::types::Type>,
     },
     If {
         condition: Expression,
@@ -79,6 +81,9 @@ pub enum Statement {
     Break,
     Continue,
     Return(Option<Expression>),
+    Import {
+        path: String,
+    },
     ExpressionStmt(Expression),
 }
 
@@ -179,8 +184,21 @@ impl ParserInstance {
                 Ok(Statement::Continue)
             }
             Token::Return => self.parse_return(),
+            Token::Import => self.parse_import(),
             _ => self.parse_expression_statement(),
         }
+    }
+    
+    fn parse_import(&mut self) -> Result<Statement, ASError> {
+        self.advance(); // consume import
+        
+        let path = match self.advance() {
+            Token::String(s) => s,
+            _ => return Err(self.error("Expected string path after import")),
+        };
+        
+        self.consume_semicolon()?;
+        Ok(Statement::Import { path })
     }
 
     fn parse_let(&mut self) -> Result<Statement, ASError> {
@@ -191,6 +209,14 @@ impl ParserInstance {
             _ => return Err(self.error("Expected variable name")),
         };
         
+        // Check for optional type annotation: let x: Type = value
+        let type_annotation = if self.peek() == Token::Colon {
+            self.advance(); // consume ':'
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        
         if self.advance() != Token::Eq {
             return Err(self.error("Expected '=' after variable name"));
         }
@@ -198,7 +224,21 @@ impl ParserInstance {
         let value = self.parse_expression(Precedence::None)?;
         self.consume_semicolon()?;
         
-        Ok(Statement::Let { name, value })
+        Ok(Statement::Let { name, value, type_annotation })
+    }
+    
+    fn parse_type(&mut self) -> Result<crate::types::Type, ASError> {
+        match self.advance() {
+            Token::Identifier(s) => match s.as_str() {
+                "Number" | "number" => Ok(crate::types::Type::Number),
+                "String" | "string" => Ok(crate::types::Type::String),
+                "Boolean" | "bool" => Ok(crate::types::Type::Boolean),
+                "Any" | "any" => Ok(crate::types::Type::Any),
+                "Void" | "void" => Ok(crate::types::Type::Void),
+                _ => Err(self.error(&format!("Unknown type: {}", s))),
+            },
+            _ => Err(self.error("Expected type name")),
+        }
     }
 
     fn parse_output(&mut self) -> Result<Statement, ASError> {
@@ -273,7 +313,7 @@ impl ParserInstance {
         
         let body = self.parse_block()?;
         
-        Ok(Statement::Function { name, params, body })
+        Ok(Statement::Function { name, params, body, return_type: None })
     }
     
     fn parse_if(&mut self) -> Result<Statement, ASError> {
