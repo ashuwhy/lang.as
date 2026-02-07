@@ -1,67 +1,106 @@
 # AS Lang
 
-A high-performance multi-language programming language that combines the power of multiple programming languages. Built with performance and extensibility in mind.
+**A high-performance multi-language programming language.**
 
-## Project Structure
+AS Lang combines the memory safety of Rust, the raw performance of C++ SIMD, and the ease of use of Python. It is designed to be embedded anywhere—from Python scripts to WebAssembly in the browser, to Go and Julia applications.
+
+## 🚀 Features
+
+- **Multi-Language Core**:
+  - **Rust**: Memory-safe runtime and compiler.
+  - **C++**: AVX2-accelerated SIMD vector operations.
+- **Universal Embeddability**:
+  - **Python**: Full extension module (`import aslang`).
+  - **WebAssembly**: Run in browser/Node.js.
+  - **Go**: CGO bindings via FFI.
+  - **Julia**: Native `ccall` bindings.
+- **Performance**:
+  - Zero-cost abstractions.
+  - Parallel array operations (via Rayon).
+  - Efficient bytecode interpreter.
+
+## 📂 Project Structure
 
 ```
 .
 ├── src/
-│   ├── core/           # Core language implementation
-│   ├── runtime/        # Runtime engine and execution
-│   └── bindings/       # Language-specific bindings
-│       ├── rust/       # Rust implementations (array ops)
-│       ├── python/     # Python bindings and extensions
-│       ├── cpp/        # C++ SIMD operations
-│       ├── go/         # Go concurrent operations
-│       ├── julia/      # Julia scientific computing
-│       └── wasm/       # WebAssembly interface
-├── lib/                # Shared libraries
-├── docs/
-│   ├── api/           # API documentation
-│   ├── design/        # Language design docs
-│   └── examples/      # Code examples
-└── tests/
-    └── integration/   # Integration tests
-
+│   ├── core/           # Rust Core (Interpreter, Compiler, FFI)
+│   └── runtime/        # Runtime engine
+├── bindings/           # Language Bindings
+│   ├── python/         # Python extension (setup.py)
+│   ├── rust/           # Rust helper crates (array_ops)
+│   ├── cpp/            # C++ SIMD operations
+│   ├── wasm/           # WebAssembly interface
+│   ├── go/             # Go bindings (cgo)
+│   └── julia/          # Julia bindings
+├── docs/               # Documentation
+└── tests/              # Integration tests
 ```
 
-## Setup
+## 🛠️ Installation
 
-1. Install dependencies:
+### Prerequisites
 
-   ```bash
-   # Python dependencies
-   pip install -r requirements.txt
-   
-   # Rust toolchain
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   
-   # Other dependencies
-   ./install.sh
-   ```
+- **Rust Toolchain**: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Python 3.8+**
+- **CMake** (for C++ SIMD ops)
+- *(Optional)* Go 1.20+, Julia 1.6+
 
-2. Build the project:
+### 1. Python Extension
 
-   ```bash
-   python setup.py install
-   ```
+Install `aslang` as a Python library:
 
-## Features
+```bash
+pip install .
+```
 
-- Multi-language integration
-- High-performance array operations
-- SIMD support
-- Concurrent execution
-- Scientific computing capabilities
-- WebAssembly support
+Usage:
 
-## Contributing
+```python
+import aslang.core as aslang
+print(aslang.run_code('print("Hello from Python!");'))
+```
 
-Please read our [Contributing Guidelines](docs/CONTRIBUTING.md) before submitting pull requests.
+### 2. Standalone Shared Library (FFI)
 
-## License
+Build the shared library (`libaslang.so` / `.dylib` / `.dll`) for use with Go, Julia, or C:
 
-MIT License - Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
+```bash
+# Build core without Python dependencies
+cargo build --release -p aslang --no-default-features
+```
 
-See [LICENSE](LICENSE) file for details.
+The library will be in `target/release/`.
+
+## 🔗 Language Bindings
+
+### Go
+
+Run `aslang` from Go using CGO:
+
+```bash
+export DYLD_LIBRARY_PATH=$(pwd)/target/release:$DYLD_LIBRARY_PATH
+go run bindings/go/aslang.go
+```
+
+### Julia
+
+Run `aslang` from Julia:
+
+```julia
+# In bindings/julia/ASLang.jl
+include("bindings/julia/ASLang.jl")
+ASLang.execute("print(\"Hello from Julia!\")")
+```
+
+### WebAssembly
+
+Build for the web:
+
+```bash
+wasm-pack build bindings/wasm --target web
+```
+
+## 📄 License
+
+MIT License - Copyright (c) 2026 Ashutosh Sharma.
