@@ -9,7 +9,7 @@ copyright = "© 2026 Ashutosh Sharma"
 
 [dependencies]
 clap = { version = "3.0", features = ["derive"] }
-pyo3 = { version = "0.18", features = ["extension-module"] }
+pyo3 = { version = "0.18", optional = true }
 libc = "0.2"
 libloading = "0.7"
 crossbeam = "0.8"
@@ -19,6 +19,10 @@ serde_json = "1.0"
 ndarray = "0.15"
 rustyline = "17.0.2"
 lsp-server = "0.7.9"
+
+[features]
+default = ["python"]
+python = ["pyo3/extension-module"]
 
 [build-dependencies]
 cc = "1.0"
@@ -37,6 +41,7 @@ opt-level = 3
 [lib]
 name = "aslang"
 path = "src/core/lib.rs"
+crate-type = ["lib", "cdylib"]
 
 [workspace]
 members = [

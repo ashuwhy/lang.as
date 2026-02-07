@@ -18,26 +18,18 @@ class CustomBuildExt(build_ext):
         for dir_path in [
             'bindings/rust/array_ops',
             'bindings/cpp',
-            'bindings/go',
-            'bindings/julia',
             'bindings/wasm'
         ]:
             ensure_dir(dir_path)
             
-        # Build Rust components
-        subprocess.check_call(['cargo', 'build', '--release'])
+        # Build Rust components (Standalone shared library for FFI)
+        subprocess.check_call(['cargo', 'build', '--release', '-p', 'aslang', '--no-default-features'])
         
         # Build language-specific components
         try:
             # C++ components
             subprocess.check_call(['cmake', '.'], cwd='bindings/cpp')
             subprocess.check_call(['make'], cwd='bindings/cpp')
-            
-            # Go components
-            subprocess.check_call(['go', 'build', '-buildmode=c-shared'], cwd='bindings/go')
-            
-            # Julia components
-            subprocess.check_call(['julia', 'build.jl'], cwd='bindings/julia')
         except subprocess.CalledProcessError as e:
             print(f"Warning: Failed to build some components: {e}")
             print("Continuing with partial build...")

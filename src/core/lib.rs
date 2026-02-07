@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::wrap_pyfunction;
 
 pub mod compiler;
@@ -9,6 +11,7 @@ pub mod error;
 pub mod lexer;
 pub mod types;
 pub mod resolver;
+pub mod ffi;
 
 pub use compiler::*;
 pub use parser::*;
@@ -18,6 +21,7 @@ pub const VERSION: &str = "0.1.0";
 pub const AUTHOR: &str = "Ashutosh Sharma <ashutoshsharmawhy@gmail.com>";
 pub const COPYRIGHT: &str = "© 2026 Ashutosh Sharma";
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn run_code(source: String) -> PyResult<String> {
     let mut runtime = runtime::Runtime::new();
@@ -27,6 +31,7 @@ fn run_code(source: String) -> PyResult<String> {
     }
 }
 
+#[cfg(feature = "python")]
 #[pymodule]
 fn core(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add("VERSION", VERSION)?;
