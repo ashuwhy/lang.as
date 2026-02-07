@@ -16,4 +16,4 @@ js-sys.workspace = true
 web-sys.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-aslang = { path = "../../.." } 
+aslang = { path = "../.." } 

@@ -41,8 +41,8 @@ path = "src/core/lib.rs"
 [workspace]
 members = [
     ".",
-    "src/bindings/rust/array_ops",
-    "src/bindings/wasm"
+    "bindings/rust/array_ops",
+    "bindings/wasm"
 ]
 
 [workspace.dependencies]

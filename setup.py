@@ -16,11 +16,11 @@ class CustomBuildExt(build_ext):
     def run(self):
         # Ensure directories exist
         for dir_path in [
-            'src/bindings/rust/array_ops',
-            'src/bindings/cpp',
-            'src/bindings/go',
-            'src/bindings/julia',
-            'src/bindings/wasm'
+            'bindings/rust/array_ops',
+            'bindings/cpp',
+            'bindings/go',
+            'bindings/julia',
+            'bindings/wasm'
         ]:
             ensure_dir(dir_path)
             
@@ -30,14 +30,14 @@ class CustomBuildExt(build_ext):
         # Build language-specific components
         try:
             # C++ components
-            subprocess.check_call(['cmake', '.'], cwd='src/bindings/cpp')
-            subprocess.check_call(['make'], cwd='src/bindings/cpp')
+            subprocess.check_call(['cmake', '.'], cwd='bindings/cpp')
+            subprocess.check_call(['make'], cwd='bindings/cpp')
             
             # Go components
-            subprocess.check_call(['go', 'build', '-buildmode=c-shared'], cwd='src/bindings/go')
+            subprocess.check_call(['go', 'build', '-buildmode=c-shared'], cwd='bindings/go')
             
             # Julia components
-            subprocess.check_call(['julia', 'build.jl'], cwd='src/bindings/julia')
+            subprocess.check_call(['julia', 'build.jl'], cwd='bindings/julia')
         except subprocess.CalledProcessError as e:
             print(f"Warning: Failed to build some components: {e}")
             print("Continuing with partial build...")
@@ -69,7 +69,8 @@ setup(
         'Programming Language :: Julia',
     ],
     keywords='aslang, programming language, multi-language, hybrid', 
-    packages=find_packages(),
+    package_dir={'': 'src'},
+    packages=find_packages(where='src'),
     install_requires=[
         'sly>=0.4',
         'setuptools-rust>=1.5.2',

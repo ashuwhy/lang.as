@@ -1,4 +1,6 @@
 // Copyright (c) 2026 Ashutosh Sharma. All rights reserved.
+use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
 
 pub mod compiler;
 pub mod parser;
@@ -14,4 +16,20 @@ pub use runtime::*;
 
 pub const VERSION: &str = "0.1.0";
 pub const AUTHOR: &str = "Ashutosh Sharma <ashutoshsharmawhy@gmail.com>";
-pub const COPYRIGHT: &str = "© 2026 Ashutosh Sharma"; 
+pub const COPYRIGHT: &str = "© 2026 Ashutosh Sharma";
+
+#[pyfunction]
+fn run_code(source: String) -> PyResult<String> {
+    let mut runtime = runtime::Runtime::new();
+    match runtime.execute(&source) {
+        Ok(output) => Ok(output),
+        Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e))),
+    }
+}
+
+#[pymodule]
+fn core(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add("VERSION", VERSION)?;
+    m.add_function(wrap_pyfunction!(run_code, m)?)?;
+    Ok(())
+} 

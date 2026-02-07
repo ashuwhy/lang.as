@@ -199,6 +199,37 @@ impl Runtime {
                     }
                 },
                 
+                // Function Calls
+                Opcode::Call(name, arg_count) => {
+                    let mut args = Vec::new();
+                    for _ in 0..*arg_count {
+                        args.push(self.pop()?);
+                    }
+                    args.reverse(); // Arguments are popped in reverse order
+
+                    if name == "print" {
+                        // Built-in print function
+                        let output_str: Vec<String> = args.iter().map(|v| v.to_string()).collect();
+                        let line = output_str.join(" ");
+                        println!("{}", line);
+                        output.push_str(&format!("{}\n", line));
+                        self.stack.push(Value::None); // print returns None
+                    } else {
+                        return Err(self.error(&format!("Function '{}' not defined or supported in this runtime version", name)));
+                    }
+                },
+                Opcode::Return => {
+                    // refined return logic to be added with stack frames
+                    // for now, just end or no-op if at top level? 
+                    // Use a simple return for now, maybe pop if value on stack? 
+                    // If return has a value, it's on the stack.
+                    // effectively, we stop executing this bytecode sequence?
+                    // But we are in a loop `while pc < bytecode.len()`.
+                    // We should break?
+                    // But wait, `compile_function` pushes `Return` at end.
+                    return Ok(output);
+                },
+
                 _ => return Err(self.error(&format!("Opcode not implemented: {:?}", opcode))),
             }
         }
