@@ -1,8 +1,32 @@
 # Follow-up: developer surveys and new languages (items left unverified by gap_fill_surveys_languages.md)
 
-> Status: IN PROGRESS (skeleton saved early; sections are filled as searches return).
+> **How this was done (read first).** Research date: 2026-09-24. This round follows `gap_fill_surveys_languages.md` and works through its COULD NOT VERIFY items in priority order. It does not repeat the Stack Overflow AI-section items that `primary_reads_ai_code.md` already read directly.
 >
-> Research date 2026-09-24. Network probe at start of this round: github.blog, survey.stackoverflow.co, arxiv.org, isocpp.org, blog.jetbrains.com, moonbitlang.com, vercel.com, ziglang.org, gleam.run, lean-lang.org, unison-lang.org, roc-lang.org, simonwillison.net, infoworld.com and devclass.com all returned `000` through the egress proxy (gateway answered 403 to CONNECT). Package registries (pypi.org, registry.npmjs.org, hex.pm, crates.io) are reachable.
+> **Network.** A probe at the start of this round showed every primary host still blocked through the egress proxy (curl `000`; the proxy log says "gateway answered 403 to CONNECT"). Blocked hosts: github.blog, octoverse.github.com, survey.stackoverflow.co, arxiv.org, isocpp.org, blog.jetbrains.com, moonbitlang.com, vercel.com, ziglang.org, gleam.run, lean-lang.org, unison-lang.org, roc-lang.org, docs.carbon-lang.dev, dev.epicgames.com, bend-lang.com, amazon.science, mitchellh.com, simonwillison.net, infoworld.com, devclass.com, heise.de, infoq.com, theregister.com, personal.us.es, ccs.neu.edu, and the secondary sites tried (forbes, visualstudiomagazine, dev.to, codecademy, 36kr, akitaonrails, gamesbeat, preqin, gotopia, alphaxiv, paperswithcode, charitynavigator, every.org). Package registries answered: **pypi.org** (and files.pythonhosted.org), **registry.npmjs.org**, and **crates.io**, which needs a User-Agent header. I did not use web.archive.org, mirrors, caches or fetch proxies. I did not read any GitHub repository. github.com URLs appear below only as search-result links.
+>
+> **Budget.** About 38 web searches, within the ~40 allowed.
+>
+> **Status labels.**
+> - **CONFIRMED**: I opened the record myself. This round, that means package-registry JSON and one downloaded wheel.
+> - **SNIPPET-CONFIRMED**: the page was blocked, but two or more independent search results, or separate searches, agree.
+> - **SNIPPET (single search)**: one search summary only. This is weaker, and it is marked as such.
+> - **CORRECTED**: gives the old value, the new value and the source.
+> - **COULD NOT VERIFY**: says what was tried.
+>
+> The search tool returns one summary per query plus a list of result URLs, and it does not tie each sentence to one URL. So each row quotes the summary wording and lists the result URLs it drew on.
+>
+> **Headline results of this round**
+> 1. **The "94% of LLM compilation errors are type-check failures" figure is from Mündler et al., "Type-Constrained Code Generation with Language Models", PLDI 2025** (PACMPL 9(PLDI):601–626, arXiv 2504.09246). It measures TypeScript from open-weight models of 2B–34B parameters.
+> 2. **Octoverse 2025** figures hold: TypeScript #1 (2,636,006 monthly contributors, Aug 2025), 180M+ developers, 36M+ new.
+> 3. **SO 2025 admired:** Go 56.5%, Python 56.4% (desired 39.3%), Rust 72.4%. Most-used: JavaScript 66%, HTML/CSS 62%, SQL 59%. No 2025 "frustrations at work" question was found.
+> 4. **C++:** the old "build times major pain 43%" is corrected. 43% was *libraries* (2024), and build times were a major pain for **over 60%**.
+> 5. **MoonBit 1.0 had not shipped** by the evidence available. It was retargeted from H1 to Q3 2026.
+> 6. **Bend 2 was announced on 17 Sept 2026.**
+> 7. **Amazon made the Lean FRO's largest-ever donation (July 2026; amount undisclosed).**
+> 8. **Hashimoto pledged another $400k to Zig (2026).**
+> 9. **JAXBench:** curated docs raise Pallas per-sample correctness from **5.8% to 37.3%**.
+>
+> **Tally for the 49 ledger rows below:** 5 CONFIRMED, 17 SNIPPET-CONFIRMED, 15 SNIPPET (single search), 3 CORRECTED (Bend 2 date, C++ 43%, Bend `PROOF.bend` wording), 9 COULD NOT VERIFY. The C++ 43% correction is tentative. Some rows combine a status with a caveat; each is counted once, by its main status.
 
 ## 1. GitHub Octoverse 2025
 
@@ -25,3 +49,79 @@ The Octoverse 2025 headline figures are SNIPPET-CONFIRMED: TypeScript #1 on GitH
 
 ### Gaps
 - I could not open github.blog, octoverse.github.com or arXiv (all `000` / 403 to CONNECT), so no row here is CONFIRMED. The 66.63% two-decimal figure was not re-seen.
+
+---
+
+## 2. Stack Overflow 2025: admired and used languages, and the work-frustration question
+
+### Takeaway
+One search summary gave admired scores for the mid-table languages: **Go 56.5% admired / 23.4% desired, Python 56.4% admired / 39.3% desired, Rust 72.4% / 29.2%, Gleam 70.8%, Zig 64.2%, Lua 46.9%**. Most-used languages: **JavaScript 66%, HTML/CSS 62%, SQL 59%**, with 49,123 respondents. Admired scores for C#, Kotlin, Swift, C++ and TypeScript were still not found after four searches. One summary gave Kotlin 51%, but it looks like a garble of Kotlin's "15th most used" rank, so I do not use it. On frustrations: nothing this round shows a 2025 version of the 2024 "frustrations at work" question. Searches for it return the 2024 technical-debt figure and the 2025 AI frustrations only. The 2024 decimals (build stack 32.9%, deploy stack 32.3%) were not seen.
+
+### Cited Findings
+
+| Item | Status | Evidence |
+|---|---|---|
+| Admired: Rust 72%, Gleam 70%, Elixir 66%, Zig 64% | SNIPPET-CONFIRMED earlier (row 2 of `gap_fill_surveys_languages.md`); decimals added here | This round's summary: "Rust has 72.4% admiration but only 29.2% desire"; "Zig was well admired with 64.2% although Lua has dropped to 46.9% admired"; "Gleam was highly admired at 70.8% and had not been on the radar before the survey was published". Result list: [frameworktraining](https://www.frameworktraining.co.uk/news-insights/stackoverflow-developer-survey-results-2025-overview), [SO 2025 Technology](https://survey.stackoverflow.co/2025/technology), [Medium/Sumit M.](https://medium.com/@sumit_m/5-takeaways-from-the-2025-stack-overflow-developer-survey-332afe1d8af3), [commandlinux](https://commandlinux.com/statistics/top-programming-languages/), [dev.to](https://dev.to/dev_tips/my-thoughts-on-the-2025-stack-overflow-survey-the-hype-the-reality-the-gap-26e3), [enstacked](https://enstacked.com/stack-overflow-developer-survey-insights/), [Grokipedia](https://grokipedia.com/page/2025_Stack_Overflow_Developer_Survey). The decimals come from one search, so they are single-summary evidence. |
+| Go admired | SNIPPET, single search (fills a gap) | "Go was at 23.4% for desired and 56.5% for admired." Same result list as the row above. Not repeated in a second search. |
+| Python admired and desired (old row 4: 39.3% desired) | SNIPPET, single search (fills a gap) | "Python is the most desired language with 39.3% desiring it, and 56.4% admiring it." Same result list. This matches the old notes' 39.3%, which came from an independent earlier session, so the desired figure now has two independent sightings. |
+| C#, Kotlin, Swift, C++, TypeScript admired | COULD NOT VERIFY | Four searches this round. C#: the summary said the 2025 admired and desired figures "weren't provided"; it gave only usage, "27.8% of Stack Overflow's 2025 respondents did extensive C# work in the past year; 29.9% among professional developers" (result list included [fosspost C# statistics](https://fosspost.org/c-statistics/); single source). Kotlin: one summary said "Kotlin ranks 15th among programming languages with 51% of developers wanting to continue using it". The only cited Kotlin source, [Kotlin on X](https://x.com/kotlin/status/1953415876033581305), says "15th among the most-used programming languages" and gives no admired figure, so the 51% is unattributed and I treat it as unreliable. Swift, C++, TypeScript: no figures in any summary. |
+| Most-used languages 2025 | SNIPPET-CONFIRMED for JavaScript; single search for HTML/CSS and SQL | "The top programming languages in 2025 include JavaScript (66%), HTML/CSS (62%), and SQL (59%)." "The survey was conducted with 49,123 respondents." Result list: [SO press release](https://stackoverflow.co/company/press/archive/stack-overflow-2025-developer-survey/), [SO 2025 Technology](https://survey.stackoverflow.co/2025/technology), [Kaggle dataset page](https://www.kaggle.com/datasets/aliaslam25/stack-overflow-developer-survey-2025), [Medium/Debasis Paul](https://medium.com/@debasispaul/stack-overflow-survey-2025-what-every-developer-needs-to-know-80dca9ea08b0), [enstacked](https://enstacked.com/stack-overflow-developer-survey-insights/). JavaScript 66% was also seen in the earlier round (row 5), so it has two sightings. Python's usage share was not given ("the specific 57.9% figure … doesn't appear"). 49,123 is consistent with the primary read in `primary_reads_ai_code.md` (33,662 = 68.7% of total, about 49,000). |
+| Did SO 2025 ask about frustrations at work? | COULD NOT VERIFY (no sign that it did) | A search for 2025 work frustrations and technical debt again returned only the 2024 figure ("Technical debt is a problem for 62% of developers, twice as much as the second- and third-most frustrating problems for developers: complex tech stacks for building and deployment") and, for 2025, the AI frustrations (66% "almost right", 45% debugging). Result list: [SO blog 2024 results](https://stackoverflow.blog/2025/01/01/developers-want-more-more-more-the-2024-results-from-stack-overflow-s-annual-developer-survey/), [SO blog "What leaders need to know from the 2025 survey"](https://stackoverflow.blog/2025/10/23/what-leaders-need-to-know-from-the-2025-stack-overflow-developer-survey/), [VentureBeat](https://venturebeat.com/ai/stack-overflow-data-reveals-the-hidden-productivity-tax-of-almost-right-ai-code), [shiftmag](https://shiftmag.dev/unhappy-developers-stack-overflow-survey-3896/), [LinearB](https://linearb.io/blog/stack-overflow-2025-developer-survey-autonomy-ai-trust). Absence from snippets is not proof of absence; the Work page is blocked. |
+| 2024: build stack 32.9%, deploy stack 32.3% | COULD NOT VERIFY | Not in any snippet this round either. Only "twice as much as the second- and third-most" (i.e. roughly 31%) is supported. |
+
+### Inferences
+- Go (56.5%) and Python (56.4%) sit about 16 points below Rust (72.4%) on "admired", while Python leads "desired" by a wide margin (39.3% vs Rust 29.2% and Go 23.4%). High admiration for small languages (Gleam 70.8%, Zig 64.2%) comes from small, self-selected user bases, so it measures satisfaction of existing users, not demand.
+- For ranking pain points, the 2025 survey offers only AI-related frustrations (66%, 45%). The technical-debt figure (62%) must be labelled 2024.
+
+### Gaps
+- Admired scores for C#, Kotlin, Swift, C++ and TypeScript; Python's 2025 usage share; the 2024 decimals. All need the blocked survey.stackoverflow.co pages or the survey's CSV (on the same host).
+
+---
+
+## 3. JetBrains State of Developer Ecosystem 2025 and the August 2026 language-switching analysis
+
+### Takeaway
+The earlier round had already SNIPPET-CONFIRMED the DevEco 2025 headline numbers, each seen in two searches: 24,534 developers, 194 countries, 85% using AI regularly, 62% relying on at least one AI coding assistant. This round spent one search on the one open conflict, the Language Promise Index (LPI) order. JetBrains' own Go blog gives an explicit ranking: **TypeScript, Rust, Python, then Go**. The DevEco post's phrase "TypeScript, Rust, and Go" describes perceived growth potential, not the rank order. The August 2026 migration post appeared again in the results with its title and date. No numeric switching shares were found.
+
+### Cited Findings
+
+| Item | Status | Evidence |
+|---|---|---|
+| 24,534 developers, 194 countries; 85% use AI regularly | SNIPPET-CONFIRMED (earlier round; not re-searched) | See rows 17–18 of `gap_fill_surveys_languages.md` ([JetBrains blog](https://blog.jetbrains.com/research/2025/10/state-of-developer-ecosystem-2025/), [InfoWorld](https://www.infoworld.com/article/4077352/85-of-developers-use-ai-regularly-jetbrains-survey.html), [abp.io](https://abp.io/community/articles/jetbrains-state-of-developer-ecosystem-report-2025-key-z0638q5e)). |
+| LPI order | SNIPPET-CONFIRMED (same wording in both rounds); conflict resolved by wording | This round: "In 2025, TypeScript, Rust, and Go boast the highest perceived growth potential, while JavaScript, PHP, and SQL appear to have reached their maturity plateau." "Go is fourth in the JetBrains Language Promise Index, trailing only Typescript, Rust, and Python." "The inaugural results highlight TypeScript, Rust, and Python as standout performers." Result list: [JetBrains DevEco 2025 blog](https://blog.jetbrains.com/research/2025/10/state-of-developer-ecosystem-2025/), [JetBrains Go blog 2025-11-10](https://blog.jetbrains.com/go/2025/11/10/go-language-trends-ecosystem-2025/), [heise](https://www.heise.de/en/news/TypeScript-on-the-rise-PHP-matures-JetBrains-shows-ecosystem-change-10771317.html), [VS Magazine 2025-10-21](https://visualstudiomagazine.com/articles/2025/10/21/typescript-tops-rust-in-promise-index-of-jetbrains-survey.aspx), [VS Magazine 2024-12-11](https://visualstudiomagazine.com/articles/2024/12/11/typescript-tops-new-jetbrains-language-promise-index.aspx). Use the order **1 TypeScript, 2 Rust, 3 Python, 4 Go**. The "inaugural" index was the 2024 edition (VS Magazine, December 2024). |
+| LPI method | SNIPPET (single search) | "JetBrains' Promise Index combines audience growth over the past five years, the stability of that growth, the percentage of developers planning to adopt the language, and the proportion of current users who intend to stay versus switch." Same result list. |
+| August 2026 language-switching analysis | SNIPPET-CONFIRMED (earlier round, two searches); title and URL seen again | "[Programming Language Migration 2025: Why Developers Switch](https://blog.jetbrains.com/research/2026/08/programming-language-migration/)". The earlier round quoted it: "project requirements are still the most common reasons for switching languages"; Kotlin "wins on pull, not push"; "C leaks talent faster than expected". This round adds no new figures. |
+
+### Inferences
+- The LPI order matters for the report. Python, a language with a massive install base, ranks above Go in "promise". TypeScript tops both the LPI and GitHub's contributor count (section 1), which makes it the incumbent a new AI-era language has to beat.
+
+### Gaps
+- Numeric migration flows (for example, what share of Java leavers go to Python) and per-language pain points in DevEco 2025. blog.jetbrains.com and devecosystem-2025.jetbrains.com are blocked.
+
+---
+
+## 4. ISO C++ developer surveys 2025 and 2026: dependency management and build times
+
+### Takeaway
+The percentages are still not pinned to a year. The most consistent reading of this round's snippets: in the **2024** survey, as analysed by Modern C++ DevOps, "managing libraries" was a **major pain for 43%** (minor 37%) and **long build times a major pain for over 60%**. So the old notes' "build times major pain 43%" mixed the two rows: 43% belongs to libraries (2024). A separate figure, **47% calling third-party library management a major pain**, appears in coverage of the 2026 survey, but no summary tied it to a year explicitly. The 2026 survey adds AI data: **39.8% use AI to write code frequently (30.9% the year before)**, and **77.5% report faulty AI output**. The respondent count **1,434 (+38%)** was attributed to 2026 by this round's summary but to 2025 by the old notes; this is unresolved.
+
+### Cited Findings
+
+| Item | Status | Evidence |
+|---|---|---|
+| "Build times major pain 43%" (old notes) | CORRECTED (tentative), 2024 data | Old: build times "major pain" fell to 43%. New: the 43% is **managing libraries**, 2024: "in 2024, 'Major Pain' responses for managing libraries decreased to 43%, while 'Minor Pain' held steady at 37%, and over 60% of respondents consider long build times a major pain point." Result list: [Modern C++ DevOps 2024 survey breakdown](https://moderncppdevops.com/2024-survey-results/), [isocpp 2025 results summary](https://isocpp.org/blog/2025/05/results-summary-2025-annual-cpp-developer-survey-lite), [isocpp 2023 summary PDF](https://isocpp.org/files/papers/CppDevSurvey-2023-summary.pdf), [InfoWorld](https://www.infoworld.com/article/2335793/the-state-of-the-c-plus-plus-developer-ecosystem.html). The earlier round's summary also gave "over 60% … long build times a major pain point, with little improvement year over year". Two separate searches agree on >60% for build times, but both lean on the same Modern C++ DevOps analysis, so it is one underlying source. |
+| Libraries/dependencies a major pain: 47% | SNIPPET, year unclear | "managing third-party libraries was named a 'major pain point' by 47% of the respondents." Seen in three searches this round and once in the earlier round. Result lists: [heise, "C++ Developers Use AI More Often, But Remain Skeptical"](https://www.heise.de/en/news/C-Developers-Use-AI-More-Often-But-Remain-Skeptical-11289474.html), [devclass 2026-05-11](https://www.devclass.com/development/2026/05/11/c-survey-finds-ai-use-rising-though-trust-is-in-short-supply/5237859), [The Register 2026-05-07](https://www.theregister.com/devops/2026/05/07/c-survey-finds-ai-use-rising-though-trust-is-in-short-supply/5234708), [isocpp 2026 summary](https://isocpp.org/blog/2026/05/2026-survey-summary). The summaries never say which survey year the 47% is from; its co-occurrence with 2026 coverage suggests 2026 but does not prove it. |
+| 2026 survey: AI use and trust | SNIPPET, single search | "39.8 percent of respondents use AI for writing code frequently, versus 30.9 percent last year … writing tests (up from 20 to 33 percent) and for debugging (up from 11.5 to 23.6 percent) … 77.5 percent of respondents reported that AI delivers faulty output, while almost 70 percent generally do not trust the answers." Result list as in the row above, plus [Microsoft C++ blog](https://devblogs.microsoft.com/cppblog/take-the-2026-iso-c-developer-survey/). |
+| Respondent count 1,434 (+38%) | COULD NOT VERIFY (year conflict) | This round: "The survey drew 1,434 respondents, 38 percent more than last year", in a summary of 2026 coverage (heise, devclass, isocpp 2026). The old notes (`developer_complaints.md`) gave the same figure for the **2025** survey. Only the isocpp PDFs can settle it. |
+| What developers would change (2026) | SNIPPET-CONFIRMED (theme list) | "many participants mention standardized package and dependency management, shorter build times, support for ABI and compatibility breaks, and more security through stricter defaults" (heise, in the 2026 result list). devclass lists "the lack of a standard package manager, the complexity of managing headers, includes, and macros, long build times, bugs from undefined behavior and implicit conversions, lack of memory safety, obscure error messages from tools, and gaps in the standard library". |
+| Carbon 0.1 timing | SNIPPET, single outlet | devclass 2026-05: the Carbon team hopes to ship "a 'working 0.1 language for evaluation' by the end of 2026 at the earliest" ([devclass](https://www.devclass.com/development/2026/05/11/c-survey-finds-ai-use-rising-though-trust-is-in-short-supply/5237859)). Same as the earlier round; no Carbon release has been reported. |
+
+### Inferences
+- For sizing, the defensible statement is: "In the ISO C++ survey, dependency/library management is a major pain for roughly 43–47% of respondents and long build times for over 60% (2024 analysis)." Both are persistent, and "standard package manager" and "shorter build times" lead the 2026 write-ins. The C++ population is large, but the respondents (about 1,400) are self-selected ISO-community developers.
+- C++ developers' AI distrust (77.5% report faulty output) is higher than Stack Overflow's general 46% distrust, though the questions differ.
+
+### Gaps
+- Exact 2025 and 2026 percentages for build times; the year of the 47%; the respondent counts for 2025 and 2026. All need the isocpp PDFs, which are blocked.
+
+---
+
