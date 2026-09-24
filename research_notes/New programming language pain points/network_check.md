@@ -53,6 +53,14 @@ ethz, berkeley, ubc). 133 of the first 150 hosts probed were blocked, then 86 of
 | Web search | Titles, URLs and snippets from blocked sites; not full text |
 | Scholar Gateway (MCP) | Full-text search, but its corpus is Wiley journals; it holds no arXiv, ACM, USENIX or PMLR papers |
 
+## After the network setting was changed
+
+The environment's network access was then set to allow all domains. About 15 minutes of
+re-probing (every 30 seconds) showed no change: arxiv.org, survey.stackoverflow.co,
+dl.acm.org and metr.org still got `403` to `CONNECT`. The running container keeps the policy it
+started with, so the new setting should apply from the next session. A browser inside the
+container goes out through the same proxy, so it does not change this.
+
 ## Consequence for the gap round
 
 Primary sources for most flagged items (arXiv preprints, ACM and USENIX proceedings,

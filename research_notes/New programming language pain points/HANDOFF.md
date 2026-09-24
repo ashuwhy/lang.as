@@ -33,6 +33,13 @@ Done: six research notes in this folder, all on branch `research/language-pain-p
 | `performance_and_gpu.md` | Two-language problem, GPU kernel languages, Mojo, Python speed work |
 | `new_languages_adoption.md` | 28+ languages' status, adoption research, solo-team timelines, LLM factor, 2026 toolchain bar |
 
+Reachability re-tested on 2026-09-24 (second session): every blocked domain below was still
+blocked from the container even after the environment's network setting was changed to allow
+all domains, which suggests the change only reaches containers started after it. Results and
+the hosts that do work are in `network_check.md`. Start the next session by re-running that
+probe (for example `curl -s -o /dev/null -w '%{http_code}' https://arxiv.org/`, where `000`
+means blocked) before launching the gap round.
+
 Not done:
 
 1. **Gap-filling research.** The first round ran with most primary sites blocked by the
