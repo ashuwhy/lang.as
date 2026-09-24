@@ -40,7 +40,24 @@ the hosts that do work are in `network_check.md`. Start the next session by re-r
 probe (for example `curl -s -o /dev/null -w '%{http_code}' https://arxiv.org/`, where `000`
 means blocked) before launching the gap round.
 
-Not done:
+**Update, 2026-09-24 (second session): both items below are now done.**
+
+- Gap-filling notes: `gap_fill_conferences.md`, `gap_fill_ai_code.md`, `gap_fill_industry.md`,
+  `gap_fill_surveys_languages.md` (search-summary level), plus `primary_reads_conferences.md`,
+  `primary_reads_ai_code.md` and `primary_reads_industry_partial.md` (pages read directly in
+  Chrome on the owner's machine; these win where they disagree), plus follow-ups
+  `frontier_2026_candidates.md`, `frontier_2026_industry_followup.md`,
+  `frontier_2026_languages_followup.md` and `frontier_2026_typescript.md`.
+- Final report: `reports/New programming language pain points.md`. It ranks ten pain points,
+  recommends **Assured Script** (a sound, TypeScript-shaped contract language with a contract
+  lock over sealed boundaries, rebuilt from AS Lang), and names LemmaScript as the closest
+  rival, with a pre-registered pivot to contributing there.
+- Still open: the report's "follow-up pass" list (LemmaScript internals first). The local
+  session that did the Chrome reads stopped mid-merge on the owner's Mac (unpushed commit
+  `f8e4353`); its content is already on this branch as `primary_reads_*.md`, so that merge can
+  be aborted.
+
+Original task list, kept for reference:
 
 1. **Gap-filling research.** The first round ran with most primary sites blocked by the
    network proxy and a search budget that ran out, so many figures come from search-result
