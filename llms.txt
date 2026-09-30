@@ -92,9 +92,7 @@ while i < n
   i += 1
 }
 
-for i in 0..a.len                      // i runs lo..hi-1; bounds and termination are automatic
-  invariant 0 <= s                     // add only what the rest of the code needs
-{
+for i in 0..a.len {                    // i runs lo..hi-1; bounds and termination are automatic
   s += a[i]
 }
 
@@ -126,8 +124,12 @@ a.len                                  // length
   non-zero divisor. Bound inputs with `requires` or refinement types to make this provable.
 - Calls are checked modularly: the callee's `requires` must hold at the call; afterwards only its
   `ensures` is known about the result. State in `ensures` everything callers need.
-- A loop is known only through its invariant: after the loop, the invariant and the negated
-  condition are all that is known. Put every fact the rest of the function needs in the invariant.
+- A loop is known only through its invariants: after the loop, they and the negated condition
+  are all that is known. The compiler infers simple invariants itself (ranges of counters,
+  accumulators like `s <= i * 1_000`, values kept in range by `%`, element ranges of arrays), so
+  write an `invariant` only for what it cannot guess: the property you actually care about, such
+  as `forall i in 0..lo: a[i] < key` or `2 * total == i * (i + 1)`. `aslang check
+  --show-inferred` lists what was inferred. Do not add invariants the compiler already infers.
 - Verdicts: proved (no run-time cost), refuted (compile error with a counterexample), unknown
   (warning W0250; a run-time check is kept). `--proved` rejects unknowns.
 - Recursive functions are checked for partial correctness; termination of recursion is not yet

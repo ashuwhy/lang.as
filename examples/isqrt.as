@@ -6,7 +6,6 @@ pub fn isqrt(n: int) -> int
   var lo = 0
   var hi = 1_000_001
   while hi - lo > 1
-    invariant 0 <= lo && lo < hi && hi <= 1_000_001
     invariant lo * lo <= n && n < hi * hi
     decreases hi - lo
   {

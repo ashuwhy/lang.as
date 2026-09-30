@@ -67,16 +67,21 @@ pub struct Report {
     pub refuted: usize,
     pub smt: String,
     pub solver_missing: bool,
+    /// Invariants the compiler inferred, per loop.
+    pub inferred: Vec<(Span, Vec<String>)>,
+    failed_inferred: Vec<(Span, String)>,
 }
 
 pub struct Options {
     pub z3: String,
     pub timeout_ms: u32,
+    /// Infer loop invariants (on by default).
+    pub infer: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { z3: std::env::var("ASLANG_Z3").unwrap_or_else(|_| "z3".into()), timeout_ms: 2000 }
+        Options { z3: std::env::var("ASLANG_Z3").unwrap_or_else(|_| "z3".into()), timeout_ms: 2000, infer: true }
     }
 }
 
@@ -100,6 +105,23 @@ struct Fv<'a> {
     fresh: usize,
     spec: bool,
     params_show: Vec<(String, String)>,
+    /// While inferring invariants, symbolic runs must not report obligations.
+    sandbox: bool,
+    infer: bool,
+    z3: String,
+    timeout_ms: u32,
+    preamble: String,
+    consts: Vec<i128>,
+    inferred: Vec<(Span, Vec<String>)>,
+    /// Obligations of inferred invariants: proved like any other, but not counted.
+    inferred_sites: HashMap<Site, String>,
+    /// Survivors of earlier inference runs per loop, used to warm-start exploratory runs.
+    warm: HashMap<Span, Vec<crate::infer::Cand>>,
+    retry: bool,
+    /// Inferred invariants that failed a final proof; not offered again.
+    skip: HashSet<(Span, String)>,
+    started: std::time::Instant,
+    budget_ms: u64,
 }
 
 pub fn sort(m: &Module, t: &Ty) -> String {
@@ -218,18 +240,46 @@ pub fn verify(m: &Module, src: &Source, opts: &Options) -> Report {
     let pre = preamble(m);
     rep.smt += &pre;
     for f in &m.funcs {
-        let mut fv = Fv { m, src, f, decls: vec![], events: vec![], fresh: 0, spec: false, params_show: vec![] };
-        let script = fv.run();
-        rep.smt += &format!("; ---- {} ----\n{script}", f.name);
-        let full = format!("{pre}(set-option :timeout {})\n{script}", opts.timeout_ms);
-        let answers = match run_z3(&opts.z3, &full) {
-            Some(a) => a,
-            None => {
-                rep.solver_missing = true;
-                vec![]
+        let mut skip: HashSet<(Span, String)> = HashSet::new();
+        let mut warm = HashMap::new();
+        for attempt in 0..4 {
+            let mut fv = Fv::new(m, src, f, opts, &pre);
+            fv.infer = opts.infer && attempt < 3;
+            fv.skip = skip.clone();
+            fv.retry = attempt > 0;
+            fv.warm = std::mem::take(&mut warm);
+            let script = fv.run();
+            let full = format!("{pre}(set-option :timeout {})\n{script}", opts.timeout_ms);
+            let t0 = std::time::Instant::now();
+            let answers = match run_z3(&opts.z3, &full) {
+                Some(a) => a,
+                None => {
+                    rep.solver_missing = true;
+                    vec![]
+                }
+            };
+            let mut one = Report::default();
+            fv.collect(answers, &mut one);
+            if std::env::var("ASLANG_TRACE").is_ok() {
+                let n: usize = fv.inferred.iter().map(|(_, v)| v.len()).sum();
+                eprintln!("[final] {} attempt {attempt}: {n} inferred, {} failed inferred, proved {} unknown {} refuted {} in {} ms; failed: {:?}", f.name, one.failed_inferred.len(), one.proved, one.runtime, one.refuted, t0.elapsed().as_millis(), one.failed_inferred.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>());
             }
-        };
-        fv.collect(answers, &mut rep);
+            warm = std::mem::take(&mut fv.warm);
+            if !one.failed_inferred.is_empty() && attempt < 3 {
+                // Some inferred invariants did not re-prove (usually a solver time-out). Drop
+                // just those and verify again; the last attempt uses no inference at all.
+                skip.extend(one.failed_inferred);
+                continue;
+            }
+            rep.smt += &format!("; ---- {} ----\n{script}", f.name);
+            rep.inferred.extend(fv.inferred.drain(..));
+            rep.verdicts.extend(one.verdicts);
+            rep.diags.extend(one.diags);
+            rep.proved += one.proved;
+            rep.runtime += one.runtime;
+            rep.refuted += one.refuted;
+            break;
+        }
     }
     if rep.solver_missing {
         rep.diags.push(Diagnostic::warning("W0251", Span::default(), format!("the SMT solver `{}` was not found, so nothing was proved", opts.z3)).with_fix("install Z3 or set ASLANG_Z3 to its path; until then every check is kept at run time"));
@@ -238,6 +288,20 @@ pub fn verify(m: &Module, src: &Source, opts: &Options) -> Report {
 }
 
 fn run_z3(z3: &str, script: &str) -> Option<Vec<SExp>> {
+    let t0 = std::time::Instant::now();
+    if let Ok(dir) = std::env::var("ASLANG_DUMP") {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = std::fs::write(format!("{dir}/q{n}.smt2"), script);
+    }
+    let r = run_z3_inner(z3, script);
+    if std::env::var("ASLANG_TRACE").is_ok() {
+        eprintln!("[z3] {} bytes, {} ms, ok={}", script.len(), t0.elapsed().as_millis(), r.is_some());
+    }
+    r
+}
+
+fn run_z3_inner(z3: &str, script: &str) -> Option<Vec<SExp>> {
     let mut child = Command::new(z3).args(["-in", "-smt2"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     child.stdin.take()?.write_all(script.as_bytes()).ok()?;
     let out = child.wait_with_output().ok()?;
@@ -245,6 +309,32 @@ fn run_z3(z3: &str, script: &str) -> Option<Vec<SExp>> {
 }
 
 impl<'a> Fv<'a> {
+    fn new(m: &'a Module, src: &'a Source, f: &'a Func, opts: &Options, pre: &str) -> Fv<'a> {
+        Fv {
+            m,
+            src,
+            f,
+            decls: vec![],
+            events: vec![],
+            fresh: 0,
+            spec: false,
+            params_show: vec![],
+            sandbox: false,
+            infer: opts.infer,
+            z3: opts.z3.clone(),
+            timeout_ms: opts.timeout_ms,
+            preamble: pre.to_string(),
+            consts: crate::infer::constants(m, f),
+            inferred: vec![],
+            inferred_sites: HashMap::new(),
+            skip: HashSet::new(),
+            warm: HashMap::new(),
+            retry: false,
+            started: std::time::Instant::now(),
+            budget_ms: 10_000,
+        }
+    }
+
     fn fresh(&mut self, base: &str, t: &Ty) -> String {
         let name = format!("{}_{}", base.replace(|c: char| !c.is_ascii_alphanumeric(), "_"), self.fresh);
         self.fresh += 1;
@@ -261,7 +351,7 @@ impl<'a> Fv<'a> {
     }
 
     fn check(&mut self, st: &St, site: Site, goal: String, what: String, fix: Option<String>, extra: Vec<(String, String)>) {
-        if self.spec {
+        if self.spec || self.sandbox {
             return;
         }
         let mut show = self.params_show.clone();
@@ -766,30 +856,26 @@ impl<'a> Fv<'a> {
                 None
             }
             TStmt::While { cond, invariants, decreases, body, modified, span } => {
-                for (i, inv) in invariants.iter().enumerate() {
+                let mut invs: Vec<(TExpr, String)> = invariants.iter().map(|i| (i.clone(), self.text(i.span))).collect();
+                if self.infer {
+                    let found = self.infer_loop(&st, cond, invariants, modified, body, *span);
+                    if !found.is_empty() && !self.sandbox {
+                        self.inferred.push((*span, found.iter().map(|c| c.text.clone()).collect()));
+                        for (k, c) in found.iter().enumerate() {
+                            let i = invs.len() + k;
+                            self.inferred_sites.insert(Site { kind: SiteKind::InvEntry(i), span: *span }, c.text.clone());
+                            self.inferred_sites.insert(Site { kind: SiteKind::InvKeep(i), span: *span }, c.text.clone());
+                        }
+                    }
+                    invs.extend(found.into_iter().map(|c| (c.e, c.text)));
+                }
+                let invariants: Vec<TExpr> = invs.iter().map(|(e, _)| e.clone()).collect();
+                for (i, (inv, text)) in invs.iter().enumerate() {
                     let g = self.spec_expr(inv, &st);
-                    let text = self.text(inv.span);
                     self.check(&st, Site { kind: SiteKind::InvEntry(i), span: *span }, g, format!("the loop invariant `{text}` may not hold when the loop starts"), Some("initialise the variables so it holds, or weaken the invariant".into()), vec![]);
                 }
-                let mut head = St { pc: st.pc.clone(), env: st.env.clone() };
-                let resized = resized_arrays(body);
-                for id in modified {
-                    let l = &self.m.locals[*id as usize];
-                    let (name, ty) = (l.name.clone(), l.ty.clone());
-                    if matches!(self.m.peel(&ty), Ty::Array(_)) && !resized.contains(id) {
-                        // Only elements are written in this loop, so the length is unchanged.
-                        let (c, sels) = ctors(self.m, &ty).remove(0);
-                        let old = head.env.get(id).cloned().unwrap_or_else(|| "0".into());
-                        let data = self.fresh_array(&ty);
-                        head.env.insert(*id, format!("({c} {data} ({} {old}))", sels[1]));
-                        continue;
-                    }
-                    let v = self.fresh(&name, &ty);
-                    let w = self.wf(&ty, &v);
-                    head.env.insert(*id, v);
-                    self.fact(&head, w);
-                }
-                for inv in invariants {
+                let head = self.loop_head(&st, modified, body);
+                for inv in &invariants {
                     let g = self.spec_expr(inv, &head);
                     self.fact(&head, g);
                 }
@@ -803,9 +889,8 @@ impl<'a> Fv<'a> {
                 }
                 let (end, _) = self.expr(body, inside);
                 if let Some(end) = end {
-                    for (i, inv) in invariants.iter().enumerate() {
+                    for (i, (inv, text)) in invs.iter().enumerate() {
                         let g = self.spec_expr(inv, &end);
-                        let text = self.text(inv.span);
                         self.check(&end, Site { kind: SiteKind::InvKeep(i), span: *span }, g, format!("the loop body may break the invariant `{text}`"), Some("strengthen the invariant or fix the body".into()), vec![]);
                     }
                     if let (Some(d), Some(d0)) = (decreases, d0) {
@@ -817,6 +902,164 @@ impl<'a> Fv<'a> {
                 Some(St { pc: and(vec![hs.pc, format!("(not {cv})")]), env: hs.env })
             }
         }
+    }
+
+    /// The state at the top of an arbitrary iteration: variables the loop changes get fresh
+    /// values; arrays whose elements are only written keep their length.
+    fn loop_head(&mut self, st: &St, modified: &[LocalId], body: &TExpr) -> St {
+        let mut head = St { pc: st.pc.clone(), env: st.env.clone() };
+        let resized = resized_arrays(body);
+        for id in modified {
+            let l = &self.m.locals[*id as usize];
+            let (name, ty) = (l.name.clone(), l.ty.clone());
+            if matches!(self.m.peel(&ty), Ty::Array(_)) && !resized.contains(id) {
+                let (c, sels) = ctors(self.m, &ty).remove(0);
+                let old = head.env.get(id).cloned().unwrap_or_else(|| "0".into());
+                let data = self.fresh_array(&ty);
+                head.env.insert(*id, format!("({c} {data} ({} {old}))", sels[1]));
+                continue;
+            }
+            let v = self.fresh(&name, &ty);
+            let w = self.wf(&ty, &v);
+            head.env.insert(*id, v);
+            self.fact(&head, w);
+        }
+        head
+    }
+
+    /// Houdini: start from template candidates, keep those true on entry, then repeatedly
+    /// drop any the loop body can break until the rest are inductive.
+    fn infer_loop(&mut self, st: &St, cond: &TExpr, user: &[TExpr], modified: &[LocalId], body: &TExpr, span: Span) -> Vec<crate::infer::Cand> {
+        let mut scope = vec![];
+        let mut ids: Vec<LocalId> = st.env.keys().copied().filter(|id| *id != crate::infer::QUANT_VAR).collect();
+        ids.sort();
+        for id in ids {
+            let l = &self.m.locals[id as usize];
+            let e = TExpr { kind: TExprKind::Local(id), ty: l.ty.clone(), span };
+            match self.m.peel(&l.ty) {
+                Ty::Int if !modified.contains(&id) && !l.name.starts_with('_') => scope.push(crate::infer::Term { e, text: l.name.clone() }),
+                Ty::Array(_) => scope.push(crate::infer::Term { e: TExpr { kind: TExprKind::Len(Box::new(e)), ty: Ty::Int, span }, text: format!("{}.len", l.name) }),
+                _ => {}
+            }
+        }
+        let t0 = std::time::Instant::now();
+        let trace = std::env::var("ASLANG_TRACE").is_ok();
+        if trace {
+            eprintln!("[loop] start {:?} sandbox={} elapsed {} ms", span, self.sandbox, self.started.elapsed().as_millis());
+        }
+        let mut all = match self.warm.get(&span) {
+            // Inside an outer loop's exploratory run, or when re-verifying after a failed
+            // inferred invariant, start from what survived before.
+            Some(prev) if self.sandbox || self.retry => prev.clone(),
+            _ => crate::infer::candidates(self.m, &self.consts, modified, &scope, body, span),
+        };
+        all.retain(|c| !self.skip.contains(&(span, c.text.clone())));
+        // Cheap scalar bounds first; element ranges of arrays second, with the scalars known.
+        let (quantified, scalar): (Vec<_>, Vec<_>) = all.into_iter().partition(|c| matches!(c.e.kind, TExprKind::Quant { .. }));
+        let mut found = self.houdini(st, cond, user, modified, body, scalar);
+        if !quantified.is_empty() {
+            let mut known: Vec<TExpr> = user.to_vec();
+            known.extend(found.iter().map(|c| c.e.clone()));
+            let more = self.houdini(st, cond, &known, modified, body, quantified);
+            found.extend(more);
+        }
+        if trace {
+            eprintln!("[loop] done {:?} -> {} found in {} ms", span, found.len(), t0.elapsed().as_millis());
+        }
+        self.warm.insert(span, found.clone());
+        found
+    }
+
+    fn houdini(&mut self, st: &St, cond: &TExpr, user: &[TExpr], modified: &[LocalId], body: &TExpr, mut cands: Vec<crate::infer::Cand>) -> Vec<crate::infer::Cand> {
+        if cands.is_empty() {
+            return cands;
+        }
+        let entry: Vec<String> = cands.iter().map(|c| self.spec_expr(&c.e, st)).collect();
+        let keep = self.all_valid(&st.pc, &entry);
+        cands = cands.into_iter().zip(keep).filter(|(_, k)| *k).map(|(c, _)| c).collect();
+        let mut converged = false;
+        for _round in 0..60 {
+            if cands.is_empty() {
+                converged = true;
+                break;
+            }
+            let (events, saved) = (self.events.len(), self.sandbox);
+            self.sandbox = true;
+            let head = self.loop_head(st, modified, body);
+            for inv in user.iter().chain(cands.iter().map(|c| &c.e)) {
+                let g = self.spec_expr(inv, &head);
+                self.fact(&head, g);
+            }
+            let keep = match self.expr(cond, head.clone()) {
+                (Some(hs), cv) => {
+                    let inside = St { pc: and(vec![hs.pc.clone(), cv]), env: hs.env.clone() };
+                    match self.expr(body, inside) {
+                        (Some(end), _) => {
+                            let goals: Vec<String> = cands.iter().map(|c| self.spec_expr(&c.e, &end)).collect();
+                            self.all_valid(&end.pc, &goals)
+                        }
+                        (None, _) => vec![true; cands.len()],
+                    }
+                }
+                (None, _) => vec![true; cands.len()],
+            };
+            self.events.truncate(events);
+            self.sandbox = saved;
+            if keep.iter().all(|k| *k) {
+                converged = true;
+                break;
+            }
+            cands = cands.into_iter().zip(keep).filter(|(_, k)| *k).map(|(c, _)| c).collect();
+        }
+        if !converged {
+            return vec![];
+        }
+        let before = cands.len();
+        let pruned = crate::infer::tightest(cands);
+        if pruned.len() == before {
+            return pruned;
+        }
+        // Dropping looser bounds can break inductiveness when a bound only implies another
+        // under side conditions, so the pruned set is checked again.
+        self.houdini(st, cond, user, modified, body, pruned)
+    }
+
+    /// Which goals hold in every state satisfying the facts so far and `pc`? One solver call
+    /// per round: a counterexample to the conjunction rules out every goal it falsifies.
+    /// Which goals hold in every state satisfying the facts so far and `pc`? One solver
+    /// process checks each goal separately with a short time limit, so a hard goal only
+    /// costs its own limit and never hides the easy ones.
+    fn all_valid(&mut self, pc: &str, goals: &[String]) -> Vec<bool> {
+        if goals.is_empty() || self.out_of_budget() {
+            return vec![false; goals.len()];
+        }
+        // True quantified goals are proved fast; false ones rarely get a model, so they only
+        // get a short limit.
+        let limit = if goals.iter().any(|g| g.contains("(forall")) { 150 } else { 500 };
+        let mut script = format!("{}(set-option :timeout {limit})\n", self.preamble);
+        for d in &self.decls {
+            script += d;
+            script.push('\n');
+        }
+        for e in &self.events {
+            if let Event::Fact(f) = e {
+                script += &format!("(assert {f})\n");
+            }
+        }
+        script += &format!("(assert {pc})\n");
+        for g in goals {
+            script += &format!("(push 1)\n(assert (not {g}))\n(check-sat)\n(pop 1)\n");
+        }
+        let Some(ans) = run_z3(&self.z3, &script) else {
+            return vec![false; goals.len()];
+        };
+        let mut out: Vec<bool> = ans.iter().map(|a| matches!(a, SExp::Atom(s) if s == "unsat")).collect();
+        out.resize(goals.len(), false);
+        out
+    }
+
+    fn out_of_budget(&self) -> bool {
+        self.started.elapsed().as_millis() as u64 > self.budget_ms
     }
 
     fn spec_expr(&mut self, e: &TExpr, st: &St) -> String {
@@ -856,6 +1099,13 @@ impl<'a> Fv<'a> {
                 _ => Verdict::Unknown,
             };
             if site.kind.is_hint() {
+                rep.verdicts.insert(*site, verdict);
+                continue;
+            }
+            if let Some(text) = self.inferred_sites.get(site) {
+                if verdict != Verdict::Proved {
+                    rep.failed_inferred.push((site.span, text.clone()));
+                }
                 rep.verdicts.insert(*site, verdict);
                 continue;
             }
@@ -1107,7 +1357,9 @@ fn pretty_inner(e: &SExp, names: &HashMap<String, (Option<Vec<String>>, String)>
 /// "old precondition implies new precondition" and
 /// "under the old precondition, new postcondition implies old postcondition".
 pub fn check_refinement(m: &Module, src: &Source, f: &Func, old_req: &[TExpr], old_ens: &[TExpr], opts: &Options) -> Option<(Verdict, Verdict)> {
-    let mut fv = Fv { m, src, f, decls: vec![], events: vec![], fresh: 0, spec: true, params_show: vec![] };
+    let pre = preamble(m);
+    let mut fv = Fv::new(m, src, f, opts, &pre);
+    fv.spec = true;
     let mut env = HashMap::new();
     for &p in &f.params {
         let l = &m.locals[p as usize];

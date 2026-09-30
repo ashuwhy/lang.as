@@ -124,7 +124,7 @@ fn array_bugs_are_rejected() {
     expect_error("search_no_progress", &arrays.replace("      lo = mid + 1", "      lo = mid"), "E0208");
     expect_error("sieve_overrun", &arrays.replace("      while j < n\n", "      while j <= n\n"), "E0210");
     expect_error("unsorted_input", &arrays.replace("let a = [1, 3, 5, 7, 9, 11]", "let a = [1, 3, 5, 7, 2, 11]"), "E0203");
-    expect_error("loop_too_far", &arrays.replace("  for i in 2..n\n", "  for i in 2..n + 1\n"), "E0210");
+    expect_error("loop_too_far", &arrays.replace("  for i in 2..n {", "  for i in 2..n + 1 {"), "E0210");
     expect_error("quantifier_in_code", "fn f(a: [int]) -> bool {\n  forall i in 0..a.len: a[i] > 0\n}\n", "E0108");
     expect_error("array_in_record", "type Bag = { items: [int] }\n", "E0118");
 }
@@ -145,4 +145,23 @@ fn arrays_are_memory_safe_under_asan() {
     let out = Command::new(dir.join("a")).env("ASAN_OPTIONS", "detect_leaks=1").output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("primes below 1000 = 168"));
+}
+
+#[test]
+fn inference_removes_bound_invariants_but_never_hides_bugs() {
+    // No invariants written: the compiler infers the bounds it needs.
+    let ok = "fn main() uses io {\n  var a = [0; 1_000]\n  var x = 7\n  for i in 0..a.len {\n    x = (x * 1_103 + 12_345) % 1_000_003\n    a[i] = x\n  }\n  var s = 0\n  for i in 0..a.len {\n    s += a[i]\n  }\n  io.print(s)\n}\n";
+    let dir = scratch("inferred", ok);
+    let (code, _, err) = aslang(&["check", "--show-inferred", "inferred.as"], &dir);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("invariant x < 1_000_003"), "{err}");
+
+    // Nothing bounds the elements here, so the sum really can overflow: inference must not
+    // make this pass.
+    let bad = "fn total(a: [int]) -> int {\n  var s = 0\n  for i in 0..a.len {\n    s += a[i]\n  }\n  s\n}\n";
+    expect_error("unbounded_sum", bad, "E0201");
+
+    // Without inference the same good program needs hand-written invariants.
+    let (code, _, _) = aslang(&["check", "--no-infer", "inferred.as"], &dir);
+    assert_eq!(code, 1);
 }

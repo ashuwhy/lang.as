@@ -20,6 +20,8 @@ options:
   --json          machine-readable output
   --no-verify     skip the prover; every check stays at run time
   --proved        fail unless every check is proved (no run-time checks)
+  --show-inferred print the loop invariants the compiler inferred
+  --no-infer      do not infer loop invariants
   --timeout <ms>  solver time budget per check (default 2000)
 ";
 
@@ -31,17 +33,21 @@ struct Args {
     verify: bool,
     proved: bool,
     timeout: u32,
+    show_inferred: bool,
+    infer: bool,
 }
 
 fn parse_args() -> Args {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let mut a = Args { cmd: String::new(), file: String::new(), out: None, json: false, verify: true, proved: false, timeout: 2000 };
+    let mut a = Args { cmd: String::new(), file: String::new(), out: None, json: false, verify: true, proved: false, timeout: 2000, show_inferred: false, infer: true };
     let mut it = argv.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
             "--json" => a.json = true,
             "--no-verify" => a.verify = false,
             "--proved" => a.proved = true,
+            "--show-inferred" => a.show_inferred = true,
+            "--no-infer" => a.infer = false,
             "-o" => a.out = it.next(),
             "--timeout" => a.timeout = it.next().and_then(|t| t.parse().ok()).unwrap_or(2000),
             "-h" | "--help" => {
@@ -115,7 +121,7 @@ fn analyse(a: &Args, with_lock: bool) -> Outcome {
     if out.diags.iter().any(|d| d.is_error()) {
         return out;
     }
-    let opts = Options { timeout_ms: a.timeout, ..Default::default() };
+    let opts = Options { timeout_ms: a.timeout, infer: a.infer, ..Default::default() };
     if a.verify {
         let rep = aslang::verify::verify(&m, &out.src, &opts);
         out.diags.extend(rep.diags.iter().cloned());
@@ -143,6 +149,7 @@ fn report(a: &Args, o: &Outcome, extra: serde_json::Value) -> bool {
         let v = json!({
             "file": a.file, "ok": ok,
             "summary": { "proved": p, "runtime_checked": r, "refuted": x, "errors": errors },
+            "inferred_invariants": o.report.as_ref().map(|r| r.inferred.iter().map(|(s, v)| { let (l, c) = o.src.line_col(s.lo); json!({"line": l, "col": c, "invariants": v}) }).collect::<Vec<_>>()).unwrap_or_default(),
             "diagnostics": o.diags.iter().map(|d| d.to_json(&o.src)).collect::<Vec<_>>(),
             "notes": o.notes,
             "result": extra,
@@ -156,10 +163,23 @@ fn report(a: &Args, o: &Outcome, extra: serde_json::Value) -> bool {
         for n in &o.notes {
             eprintln!("note: {n}");
         }
+        if a.show_inferred {
+            if let Some(r) = &o.report {
+                for (span, invs) in &r.inferred {
+                    let (l, c) = o.src.line_col(span.lo);
+                    eprintln!("inferred for the loop at {}:{l}:{c}:", o.src.name);
+                    for i in invs {
+                        eprintln!("    invariant {i}");
+                    }
+                }
+            }
+        }
         let name = file_key(&a.file);
+        let inferred: usize = o.report.as_ref().map(|r| r.inferred.iter().map(|(_, v)| v.len()).sum()).unwrap_or(0);
+        let inferred_note = if inferred > 0 { format!(" ({inferred} loop invariants inferred)") } else { String::new() };
         if ok {
             if o.report.is_some() {
-                eprintln!("ok {name}: {p} checks proved, {r} kept at run time");
+                eprintln!("ok {name}: {p} checks proved, {r} kept at run time{inferred_note}");
             } else {
                 eprintln!("ok {name}: not verified (--no-verify), every check kept at run time");
             }

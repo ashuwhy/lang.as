@@ -9,3 +9,4 @@ pub mod codegen;
 pub mod lock;
 pub mod explain;
 pub mod own;
+pub mod infer;

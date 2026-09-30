@@ -6,7 +6,6 @@ pub fn sum_to(n: int) -> int
   var total = 0
   var i = 0
   while i < n
-    invariant 0 <= i && i <= n
     invariant 2 * total == i * (i + 1)
     decreases n - i
   {

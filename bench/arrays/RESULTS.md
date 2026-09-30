@@ -29,26 +29,30 @@ What differs is not the speed but what each program is known not to do:
 
 | | Out-of-bounds access | Integer overflow | Evidence |
 |---|---|---|---|
-| AS | proved impossible, no run-time checks | proved impossible | 18 / 72 / 58 / 32 checks proved per program |
+| AS | proved impossible, no run-time checks | proved impossible | 14 / 64 / 52 / 24 checks proved per program (plus every inferred loop invariant) |
 | C, C++ | undefined behaviour, unchecked | undefined behaviour | none |
 | Rust | checked at run time (panic) | wraps silently in release builds | none |
 | Go, Java, JavaScript, Python | checked at run time | wraps (Go, Java), loses precision (JS) or grows (Python) | none |
 
-The cost is on the page: AS sources are longer because they state the contracts the proofs
-need. Source size in o200k tokens:
+The cost is on the page: AS sources state the contracts their proofs need. Since this table was
+first made, the compiler infers loop invariants (Houdini-style: template candidates, kept only
+when inductive, then proved like hand-written ones), and a greedy pass removed every
+hand-written invariant it made redundant. Source size in o200k tokens:
 
-| Workload | AS | C | Rust | Go | Python |
+| Program | AS, invariants by hand | AS, with inference | Rust | Go | Python |
 |---|---|---|---|---|---|
-| sieve | 171 | 130 | 101 | 93 | 66 |
-| matmul | 611 | 350 | 255 | 239 | 191 |
-| quicksort | 411 | 334 | 270 | 254 | 249 |
-| sum | 239 | 172 | 122 | 122 | 78 |
+| sieve | 171 | 151 | 101 | 93 | 66 |
+| matmul | 611 | 528 | 255 | 239 | 191 |
+| quicksort | 411 | 359 | 270 | 254 | 249 |
+| sum | 239 | 148 | 122 | 122 | 78 |
+| primes (`bench/perf`) | 191 | 148 | 141 | - | - |
+| collatz (`bench/perf`) | 299 | 258 | 174 | - | - |
+| isqrt (`bench/perf`) | 263 | 209 | 158 | - | - |
+| total | 2,185 | 1,801 (-18%) | 1,221 | | |
 
-Most of the extra tokens in `matmul` are element bounds (`forall i in 0..a.len: 0 <= a[i] &&
-a[i] <= 1_000`) that exist only to prove the arithmetic cannot overflow. Inferring such
-invariants automatically is the most direct way to close this gap and is on the roadmap.
-
-Two compiler changes made during this run mattered: passing proved facts to GCC through
-`__attribute__((assume))` instead of branches (branches blocked vectorisation of `sum`), and
-leaving out facts about variables the loop changes (they broke GCC's reduction pattern). Before
-those fixes AS took 213 ms on `sum`.
+`sieve`, `quicksort`, `sum`, `primes` and `collatz` now need no hand-written invariants at all.
+What remains is intent the compiler cannot guess (the square bounds in `isqrt`, sortedness facts
+in binary search) and function contracts, such as the element bounds `matmul` requires of its
+inputs, which Rust does not state at all. Inferring the contracts of private functions is the
+next step. Inference costs verification time: the heaviest programs here take 4-8 s to check
+instead of about 1 s; `--no-infer` skips it when every invariant is written by hand.

@@ -40,10 +40,17 @@ lengths across loops that only write elements. `bench/arrays/` compares AS with 
 Go, Java, JavaScript and Python on four workloads (`RESULTS.md`): AS is in the C/Rust band on
 all four with every check proved; AddressSanitizer finds no leaks or memory errors.
 
+Then loop-invariant inference (`compiler/src/infer.rs` and the Houdini driver in
+`verify.rs`): template candidates (bounds against constants and variables, accumulator bounds
+`s <= i * C`, array element ranges), filtered by entry and preservation checks, pruned to the
+tightest and re-validated, then proved again in the normal pass; if one fails there it is
+dropped and the function re-verified. Benchmark sources shrank 18%. Debug with
+`ASLANG_TRACE=1` (solver calls and timings) and `ASLANG_DUMP=<dir>` (every SMT script).
+
 Next, in order:
 
-1. Loop-invariant inference (bounds and element-range invariants), to shrink the contract
-   tokens that make AS sources longer than Rust's in `bench/arrays/RESULTS.md`.
+1. Infer postconditions of private functions (the remaining contract tokens), and make
+   inference faster (it takes 4-8 s on the heaviest benchmarks).
 2. Strings, arrays inside records and enums, recursive enums (heap values in general).
 3. Generics, modules, `?`, sized integers, termination of recursion; floats.
 4. More proof-driven optimisation (`restrict` from value semantics, narrowing proved-small

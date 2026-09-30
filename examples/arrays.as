@@ -6,9 +6,7 @@ pub fn sum(a: [int]) -> int
   ensures result >= 0
 {
   var s = 0
-  for i in 0..a.len
-    invariant 0 <= s && s <= i * 1_000_000
-  {
+  for i in 0..a.len {
     s += a[i]
   }
   s
@@ -23,7 +21,6 @@ pub fn search(a: [int], key: int) -> int
   var lo = 0
   var hi = a.len
   while lo < hi
-    invariant 0 <= lo && lo <= hi && hi <= a.len
     invariant forall i in 0..lo: a[i] < key
     invariant forall i in hi..a.len: a[i] > key
     decreases hi - lo
@@ -47,14 +44,11 @@ pub fn count_primes(n: int) -> int
 {
   var composite = [false; n]
   var count = 0
-  for i in 2..n
-    invariant 0 <= count && count <= i
-  {
+  for i in 2..n {
     if !composite[i] {
       count += 1
       var j = i * i
       while j < n
-        invariant j >= 0
         decreases n - j
       {
         composite[j] = true
