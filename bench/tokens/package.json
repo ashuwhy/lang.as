@@ -1,0 +1,11 @@
+{
+  "name": "as-token-bench",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "gpt-tokenizer": "4.0.0",
+    "llama3-tokenizer-js": "1.2.0",
+    "@lenml/tokenizer-qwen2_5": "3.7.2",
+    "@lenml/tokenizer-deepseek_v3": "3.7.2"
+  }
+}
