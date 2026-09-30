@@ -9,9 +9,11 @@ enum TransferError { Frozen, Insufficient(short: Cents) }
 pub fn transfer(from: Account, to: Account, amount: Cents) -> Result<Moved, TransferError>
   requires from.id != to.id
   requires to.balance + amount <= 1_000_000_000_000
-  ensures result is Ok(m) ==> m.from.balance == from.balance - amount
-  ensures result is Ok(m) ==> m.to.balance == to.balance + amount
+  ensures result is Ok(m) ==> m.from == ({ ...from, balance: from.balance - amount })
+  ensures result is Ok(m) ==> m.to == ({ ...to, balance: to.balance + amount })
   ensures (result is Err(Frozen)) == (from.frozen || to.frozen)
+  ensures (result is Ok(m)) == (!from.frozen && !to.frozen && amount <= from.balance)
+  ensures result is Err(Insufficient(s)) ==> s == amount - from.balance
 {
   if from.frozen || to.frozen { return Err(Frozen) }
   if from.balance < amount { return Err(Insufficient(amount - from.balance)) }

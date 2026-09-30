@@ -92,10 +92,20 @@ concrete examples faster than formulas. Generating a few input/output examples t
 allows and one it forbids, from solver models, is cheap here (the counterexample machinery
 exists) and would make every contract, written or inferred, easier to review.
 
+Then review examples (`aslang examples file.as [--fn name]`, `Fv::examples` in
+`verify.rs`): the verifier makes two calls on the same arguments, so what it knows about each
+result is exactly what callers may assume (written or inferred `ensures`, or a helper's exact
+body). From one solver script it reports an allowed call and result, whether two different
+results are allowed for the same input (`open`) or proved impossible (`decided`), a result each
+`ensures` clause forbids, and an input each `requires` clause rejects, all with small values.
+Run on `examples/ledger.as` it found three gaps in the flagship contract (ids of the moved
+accounts not pinned, the `Insufficient` shortfall not pinned, `Err(Insufficient(0))` allowed
+when the money was there); with three more `ensures` lines the contract is now `decided`.
+
 Next, in order:
 
-1. Review examples for contracts (`aslang explain-contract f`, and in `--show-inferred` and
-   the lock report): allowed and forbidden input/output pairs from solver models.
+1. Show examples where they are needed without asking: in the lock report next to a
+   weakening, and as a note on a `pub` function whose contract is `open`.
 2. Faster inference (parallel solver calls per function; `matmul` takes about 9 s) and the
    nested element-range case above.
 3. Strings, arrays inside records and enums, recursive enums (heap values in general).

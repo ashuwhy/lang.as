@@ -137,6 +137,10 @@ a.len                                  // length
   write an `invariant` only for what it cannot guess: the property you actually care about, such
   as `forall i in 0..lo: a[i] < key` or `2 * total == i * (i + 1)`. `aslang check
   --show-inferred` lists what was inferred. Do not add invariants the compiler already infers.
+- `aslang examples file.as [--fn name]` shows what each contract means: an allowed call and
+  result, results it forbids, inputs each `requires` rejects, and either `decided` (every
+  input has exactly one allowed result) or `open` (two allowed results for the same input).
+  An `open` result you did not intend means an `ensures` is missing.
 - Verdicts: proved (no run-time cost), refuted (compile error with a counterexample), unknown
   (warning W0250; a run-time check is kept). `--proved` rejects unknowns.
 - Recursive functions are checked for partial correctness; termination of recursion is not yet

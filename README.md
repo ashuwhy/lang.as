@@ -18,9 +18,11 @@ enum TransferError { Frozen, Insufficient(short: Cents) }
 pub fn transfer(from: Account, to: Account, amount: Cents) -> Result<Moved, TransferError>
   requires from.id != to.id
   requires to.balance + amount <= 1_000_000_000_000
-  ensures result is Ok(m) ==> m.from.balance == from.balance - amount
-  ensures result is Ok(m) ==> m.to.balance == to.balance + amount
+  ensures result is Ok(m) ==> m.from == ({ ...from, balance: from.balance - amount })
+  ensures result is Ok(m) ==> m.to == ({ ...to, balance: to.balance + amount })
   ensures (result is Err(Frozen)) == (from.frozen || to.frozen)
+  ensures (result is Ok(m)) == (!from.frozen && !to.frozen && amount <= from.balance)
+  ensures result is Err(Insufficient(s)) ==> s == amount - from.balance
 {
   if from.frozen || to.frozen { return Err(Frozen) }
   if from.balance < amount { return Err(Insufficient(amount - from.balance)) }
@@ -31,9 +33,29 @@ pub fn transfer(from: Account, to: Account, amount: Cents) -> Result<Moved, Tran
 
 ```text
 $ aslang run examples/ledger.as
-ok ledger.as: 20 checks proved, 0 kept at run time
+ok ledger.as: 26 checks proved, 0 kept at run time
 moved, new balance: 30
 ```
+
+A proof is only as good as the contract, so AS also shows a reviewer what a contract means,
+with concrete values from the solver:
+
+```text
+$ aslang examples examples/ledger.as
+transfer
+  allowed    transfer(from: { id: -999, balance: 999, frozen: true }, to: { id: -1000, balance: 0, frozen: false }, amount: 1000) -> Err(Frozen)
+  decided    every allowed input has exactly one allowed result
+  forbidden  transfer(from: { id: -999, balance: 999, frozen: false }, to: { id: -1000, balance: 0, frozen: false }, amount: 1000) -> Err(Insufficient(0))   (breaks `ensures result is Err(Insufficient(s)) ==> s == amount - from.balance`)
+  rejected   transfer(from: { id: -999, balance: 999, frozen: false }, to: { id: -999, balance: 0, frozen: false }, amount: 1000)   (breaks `requires from.id != to.id`)
+  ...
+```
+
+`decided` is proved: this contract fixes the result for every input. The first version of
+this example only pinned the two balances, and `aslang examples` showed why that was not
+enough: the same transfer "may return" accounts with different ids, then an `Insufficient`
+error with any shortfall, then `Err(Insufficient(0))` where the money was there. Each finding
+became one `ensures` line. A weak contract such as `sum`'s `ensures result >= 0` shows up as
+`sum(a: [2, 2]) -> 0` allowed.
 
 ## What it catches
 
@@ -86,7 +108,7 @@ versions, and all seven together are within 18% of Rust (`bench/arrays/RESULTS.m
 
 ## Built for models as well as people
 
-- **The whole language fits in 3,106 tokens.** [`llms.txt`](llms.txt) is the complete
+- **The whole language fits in 3,194 tokens.** [`llms.txt`](llms.txt) is the complete
   reference; a model that reads it can write AS.
 - **Short.** On four small programs with identical proved contracts, AS takes 230 tokens against
   Dafny's 249, Verus's 266 and Vera's 447 (`bench/tokens/`).
@@ -98,6 +120,8 @@ versions, and all seven together are within 18% of Rust (`bench/arrays/RESULTS.m
   `at(clamp(...), clamp(...), w)` with every index proved and no contract written).
   `--show-inferred` shows what was inferred. You write contracts for the public API and for
   the properties you care about.
+- **Contracts a reviewer can check at a glance.** `aslang examples` prints inputs and
+  results a contract allows, forbids and rejects, and says whether it decides the result.
 - **A definite finish line.** `N checks proved, 0 kept at run time` tells an agent it is done.
 - **Greppable.** Effects are called by name (`io.print`), variant names are global, there are no
   macros, overloading or implicit conversions.

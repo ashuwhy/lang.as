@@ -52,7 +52,7 @@ fn seeded_bugs_are_rejected() {
     let ledger = example("examples/ledger.as");
     let sum = example("examples/sum.as");
     let isqrt = example("examples/isqrt.as");
-    expect_error("off_by_one", &ledger.replace("balance: to.balance + amount }", "balance: to.balance + amount - 1 }"), "E0204");
+    expect_error("off_by_one", &ledger.replace("{ ...to,   balance: to.balance + amount }", "{ ...to,   balance: to.balance + amount - 1 }"), "E0204");
     expect_error("missing_bound", &ledger.replace("  requires to.balance + amount <= 1_000_000_000_000\n", ""), "E0205");
     expect_error("same_account", &ledger.replace("transfer(from: a, to: b, amount: 30)", "transfer(from: a, to: a, amount: 30)"), "E0203");
     expect_error("vacuous", &ledger.replace("requires from.id != to.id", "requires from.id != to.id && from.id == to.id"), "E0209");
@@ -71,7 +71,7 @@ fn lock_rejects_weakened_contract() {
     let (code, _, err) = aslang(&["lock", "locked.as"], &dir);
     assert_eq!(code, 0, "{err}");
     let weakened = example("examples/ledger.as")
-        .replace("ensures result is Ok(m) ==> m.to.balance == to.balance + amount", "ensures result is Ok(m) ==> m.to.balance <= to.balance + amount");
+        .replace("ensures result is Ok(m) ==> m.to == ({ ...to, balance: to.balance + amount })", "ensures result is Ok(m) ==> m.to.balance <= to.balance + amount");
     std::fs::write(dir.join("locked.as"), &weakened).unwrap();
     let (code, _, err) = aslang(&["check", "locked.as"], &dir);
     assert_eq!(code, 1);
@@ -207,4 +207,21 @@ fn small_helpers_are_summarized_exactly() {
     let dir = scratch("looped", looped);
     let (_, _, err) = aslang(&["check", "--show-inferred", "looped.as"], &dir);
     assert!(!err.contains("exact"), "{err}");
+}
+
+#[test]
+fn examples_show_what_a_contract_allows() {
+    // The ledger contract decides every result; `sum` only promises `result >= 0`.
+    let (code, out, err) = aslang(&["examples", "examples/ledger.as"], &root());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("decided    every allowed input has exactly one allowed result"), "{out}");
+    assert!(out.contains("(breaks `requires from.id != to.id`)"), "{out}");
+    let (_, out, _) = aslang(&["examples", "--fn", "sum", "examples/arrays.as"], &root());
+    assert!(out.contains("open       sum("), "{out}");
+    assert!(out.contains("(breaks `ensures result >= 0`)"), "{out}");
+    assert!(!out.contains("search("), "{out}");
+    // Exact summaries of helpers decide their result too.
+    let (_, out, _) = aslang(&["examples", "--json", "--fn", "at", "examples/grid.as"], &root());
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["examples"][0]["decided"], true, "{out}");
 }

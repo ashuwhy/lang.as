@@ -14,6 +14,7 @@ usage:
   aslang lock <file.as>             pin the public contracts in aslang.lock
   aslang emit-c <file.as>           print the generated C
   aslang emit-smt <file.as>         print the SMT-LIB queries
+  aslang examples <file.as>         show inputs and results each contract allows and forbids
   aslang explain <code>             explain a diagnostic, e.g. `aslang explain E0201`
 
 options:
@@ -23,6 +24,7 @@ options:
   --show-inferred print the loop invariants and contracts the compiler inferred
   --no-infer      do not infer loop invariants
   --timeout <ms>  solver time budget per check (default 2000)
+  --fn <name>     with `examples`: only this function
 ";
 
 struct Args {
@@ -35,11 +37,12 @@ struct Args {
     timeout: u32,
     show_inferred: bool,
     infer: bool,
+    only: Option<String>,
 }
 
 fn parse_args() -> Args {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let mut a = Args { cmd: String::new(), file: String::new(), out: None, json: false, verify: true, proved: false, timeout: 2000, show_inferred: false, infer: true };
+    let mut a = Args { cmd: String::new(), file: String::new(), out: None, json: false, verify: true, proved: false, timeout: 2000, show_inferred: false, infer: true, only: None };
     let mut it = argv.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
@@ -49,6 +52,7 @@ fn parse_args() -> Args {
             "--show-inferred" => a.show_inferred = true,
             "--no-infer" => a.infer = false,
             "-o" => a.out = it.next(),
+            "--fn" => a.only = it.next(),
             "--timeout" => a.timeout = it.next().and_then(|t| t.parse().ok()).unwrap_or(2000),
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -225,6 +229,29 @@ fn build(a: &Args, o: &Outcome, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn render_examples(e: &aslang::verify::Examples) -> String {
+    let call = |args: &[(String, String)]| format!("{}({})", e.func, args.iter().map(|(n, v)| format!("{n}: {v}")).collect::<Vec<_>>().join(", "));
+    let mut s = format!("{}\n", e.func);
+    if let Some((a, r)) = &e.allowed {
+        s += &format!("  allowed    {} -> {r}\n", call(a));
+    }
+    if let Some((a, r1, r2)) = &e.open {
+        s += &format!("  open       {} may return {r1} or {r2}: the contract does not decide which\n", call(a));
+    } else if e.decided {
+        s += "  decided    every allowed input has exactly one allowed result\n";
+    }
+    for (clause, a, r) in &e.forbidden {
+        s += &format!("  forbidden  {} -> {r}   (breaks `ensures {clause}`)\n", call(a));
+    }
+    for (clause, a) in &e.rejected {
+        s += &format!("  rejected   {}   (breaks `requires {clause}`)\n", call(a));
+    }
+    if e.returns_value && e.allowed.is_none() {
+        s += "  (no example found within the time budget)\n";
+    }
+    s + "\n"
+}
+
 fn main() {
     let a = parse_args();
     match a.cmd.as_str() {
@@ -241,6 +268,31 @@ fn main() {
         "check" => {
             let o = analyse(&a, true);
             exit(if report(&a, &o, json!(null)) { 0 } else { 1 })
+        }
+        "examples" => {
+            let o = analyse(&a, false);
+            let (Some(m), Some(r)) = (&o.module, &o.report) else {
+                report(&a, &o, json!(null));
+                exit(1)
+            };
+            let opts = Options { timeout_ms: a.timeout, infer: a.infer, ..Default::default() };
+            let exs = aslang::verify::examples(m, &o.src, &opts, r, a.only.as_deref());
+            if a.json {
+                let pairs = |v: &[(String, String)]| v.iter().map(|(n, x)| json!({"name": n, "value": x})).collect::<Vec<_>>();
+                let out: Vec<_> = exs.iter().map(|e| json!({
+                    "function": e.func,
+                    "allowed": e.allowed.as_ref().map(|(a, r)| json!({"args": pairs(a), "result": r})),
+                    "decided": e.decided,
+                    "open": e.open.as_ref().map(|(a, r1, r2)| json!({"args": pairs(a), "results": [r1, r2]})),
+                    "forbidden": e.forbidden.iter().map(|(c, a, r)| json!({"breaks": c, "args": pairs(a), "result": r})).collect::<Vec<_>>(),
+                    "rejected": e.rejected.iter().map(|(c, a)| json!({"breaks": c, "args": pairs(a)})).collect::<Vec<_>>(),
+                })).collect();
+                println!("{}", serde_json::to_string_pretty(&json!({"file": a.file, "examples": out})).unwrap());
+            } else {
+                for e in &exs {
+                    print!("{}", render_examples(e));
+                }
+            }
         }
         "emit-smt" => {
             let o = analyse(&a, false);

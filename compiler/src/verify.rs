@@ -73,6 +73,8 @@ pub struct Report {
     pub inferred_contracts: Vec<(Span, String, Vec<String>)>,
     /// The inferred preconditions themselves, per function: proved at every call site.
     pub inferred_pre: HashMap<usize, Vec<TExpr>>,
+    /// All inferred contracts, per function (used by `examples`).
+    pub contracts: HashMap<usize, Contract>,
     failed_inferred: Vec<(Span, String)>,
     failed_contracts: Vec<(usize, String)>,
 }
@@ -292,6 +294,9 @@ pub fn verify(m: &Module, src: &Source, opts: &Options) -> Report {
                 rep.inferred_contracts.push((f.sig_span, f.name.clone(), clauses));
             }
             rep.inferred_pre.insert(fi, c.pre.iter().map(|x| x.e.clone()).collect());
+        }
+        for (fi, c) in &contracts {
+            rep.contracts.insert(*fi, c.clone());
         }
         return rep;
     }
@@ -605,6 +610,187 @@ fn run_z3_until(z3: &str, script: &str, cap_ms: u64) -> Option<Vec<SExp>> {
 }
 
 impl<'a> Fv<'a> {
+    fn examples(&mut self, fi: usize, pre: &str) -> Option<Examples> {
+        let m = self.m;
+        let f = &m.funcs[fi];
+        let mut env = HashMap::new();
+        for &p in &f.params {
+            let l = &m.locals[p as usize];
+            let v = self.fresh(&l.name, &l.ty.clone());
+            self.params_show.push((l.name.clone(), v.clone()));
+            env.insert(p, v);
+        }
+        let st = St { pc: "true".into(), env };
+        let mut wf = vec![];
+        for &p in &f.params {
+            let v = st.env[&p].clone();
+            wf.push(self.wf(&m.locals[p as usize].ty.clone(), &v));
+        }
+        let inferred = self.contracts.get(&fi).cloned().unwrap_or_default();
+        let mut reqs: Vec<(String, String)> = f.requires.iter().enumerate().map(|(i, r)| (f.requires_src[i].clone(), self.spec_expr(r, &st))).collect();
+        for c in &inferred.pre {
+            let g = self.spec_expr(&c.e, &st);
+            reqs.push((format!("{} (inferred)", c.text), g));
+        }
+        let req_all = and(reqs.iter().map(|(_, g)| g.clone()).collect());
+        // Two calls on the same arguments: what a caller may assume about each result.
+        let call = TExpr { kind: TExprKind::Call(fi, f.params.iter().map(|p| TExpr { kind: TExprKind::Local(*p), ty: m.locals[*p as usize].ty.clone(), span: f.sig_span }).collect()), ty: f.ret.clone(), span: f.sig_span };
+        let inside = St { pc: req_all.clone(), env: st.env.clone() };
+        let (_, r1) = self.expr(&call, inside.clone());
+        let (_, r2) = self.expr(&call, inside);
+        // A result nothing is known about, to find values an `ensures` clause forbids.
+        let rf = self.fresh("forbidden", &f.ret);
+        wf.push(self.wf(&f.ret.clone(), &rf));
+        let mut st_f = st.clone();
+        st_f.env.insert(f.result, rf.clone());
+        let mut ens: Vec<(String, String)> = f.ensures.iter().enumerate().map(|(i, e)| (f.ensures_src[i].clone(), self.spec_expr(e, &st_f))).collect();
+        for c in &inferred.post {
+            let g = self.spec_expr(&c.e, &st_f);
+            ens.push((format!("{} (inferred)", c.text), g));
+        }
+
+        let params: Vec<String> = self.params_show.iter().map(|(_, v)| v.clone()).collect();
+        let returns_value = f.ret != Ty::Unit;
+        let mut small = vec![];
+        let mut nice = vec![];
+        for &p in &f.params {
+            let (v, ty) = (st.env[&p].clone(), m.locals[p as usize].ty.clone());
+            small.push(self.small_value(&ty, &v));
+            // Examples read better with a few elements than with none.
+            if let Ty::Array(_) = m.peel(&ty) {
+                let (_, sels) = ctors(m, &ty).remove(0);
+                nice.push(format!("(>= ({} {v}) 2)", sels[1]));
+            }
+        }
+        for r in [&r1, &r2, &rf] {
+            small.push(self.small_value(&f.ret.clone(), r));
+        }
+        let (small, nice) = (and(small), and(nice));
+        let mut script = format!("{pre}(set-option :timeout 2000)\n");
+        for d in &self.decls {
+            script += d;
+            script.push('\n');
+        }
+        for e in &self.events {
+            if let Event::Fact(x) = e {
+                script += &format!("(assert {x})\n");
+            }
+        }
+        script += &format!("(assert {})\n", and(wf));
+        let mut queries: Vec<(String, Vec<String>)> = vec![];
+        if returns_value {
+            queries.push((req_all.clone(), vec![r1.clone()]));
+            queries.push((format!("(and {req_all} (not (= {r1} {r2})))"), vec![r1.clone(), r2.clone()]));
+            for (_, g) in ens.iter().take(6) {
+                queries.push((format!("(and {req_all} (not {g}))"), vec![rf.clone()]));
+            }
+        }
+        for (i, _) in reqs.iter().enumerate().take(6) {
+            let others: Vec<String> = reqs.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, (_, g))| g.clone()).collect();
+            queries.push((format!("(and {} (not {}))", and(others), reqs[i].1), vec![]));
+        }
+        for (q, extra) in &queries {
+            let mut vars = params.clone();
+            vars.extend(extra.iter().cloned());
+            let get = if vars.is_empty() { "(get-value (0))\n".to_string() } else { format!("(get-value ({}))\n", vars.join(" ")) };
+            script += &format!("(push 1)\n(assert {q})\n(check-sat)\n{get}(assert {small})\n(check-sat)\n{get}(assert {nice})\n(check-sat)\n{get}(pop 1)\n");
+        }
+        let ans = run_z3(&self.z3, &script)?;
+        let mut it = ans.into_iter();
+        let names: Vec<String> = self.params_show.iter().map(|(n, _)| n.clone()).collect();
+        let mut answers = vec![];
+        let mut unsat = vec![];
+        for _ in &queries {
+            let (s1, v1, s2, v2, s3, v3) = (it.next(), it.next(), it.next(), it.next(), it.next(), it.next());
+            let sat = |s: &Option<SExp>| matches!(s, Some(SExp::Atom(x)) if x == "sat");
+            unsat.push(matches!(&s1, Some(SExp::Atom(x)) if x == "unsat"));
+            let vals = if sat(&s3) { v3 } else if sat(&s2) { v2 } else if sat(&s1) { v1 } else { None };
+            answers.push(vals.map(|v| match v {
+                SExp::List(pairs) => pairs.iter().map(|p| match p {
+                    SExp::List(kv) if kv.len() == 2 => pretty(m, &kv[1]),
+                    _ => "?".into(),
+                }).collect::<Vec<String>>(),
+                _ => vec![],
+            }));
+        }
+        let args = |vals: &[String]| names.iter().cloned().zip(vals.iter().cloned()).collect::<Vec<_>>();
+        let mut ex = Examples { func: f.name.clone(), allowed: None, open: None, decided: false, forbidden: vec![], rejected: vec![], returns_value };
+        let mut k = 0;
+        if returns_value {
+            if let Some(v) = &answers[0] {
+                ex.allowed = Some((args(v), v.last().cloned().unwrap_or_default()));
+            }
+            if let Some(v) = &answers[1] {
+                let n = v.len();
+                ex.open = Some((args(v), v[n - 2].clone(), v[n - 1].clone()));
+            }
+            ex.decided = unsat[1] && answers[0].is_some();
+            k = 2;
+            for (text, _) in ens.iter().take(6) {
+                if let Some(v) = &answers[k] {
+                    ex.forbidden.push((text.clone(), args(v), v.last().cloned().unwrap_or_default()));
+                }
+                k += 1;
+            }
+        }
+        for (text, _) in reqs.iter().take(6) {
+            if let Some(v) = &answers[k] {
+                ex.rejected.push((text.clone(), args(v)));
+            }
+            k += 1;
+        }
+        Some(ex)
+    }
+
+    /// Short arrays with small elements, so examples stay readable.
+    fn small_array(&mut self, t: &Ty, v: &str) -> String {
+        match self.m.peel(t) {
+            Ty::Array(e) if self.m.peel(&e) == Ty::Int => {
+                let (_, sels) = ctors(self.m, t).remove(0);
+                let k = format!("qs_{}", self.fresh);
+                self.fresh += 1;
+                format!("(and (<= ({} {v}) 4) (forall (({k} Int)) (=> (and (<= 0 {k}) (< {k} ({} {v}))) (<= (- 1000) (select ({} {v}) {k}) 1000))))", sels[1], sels[1], sels[0])
+            }
+            _ => "true".into(),
+        }
+    }
+
+    /// Small integers everywhere inside a value (fields, payloads), short arrays.
+    fn small_value(&mut self, t: &Ty, v: &str) -> String {
+        self.small_depth(t, v, 0)
+    }
+
+    fn small_depth(&mut self, t: &Ty, v: &str, depth: usize) -> String {
+        let m = self.m;
+        if depth > 3 {
+            return "true".into();
+        }
+        match m.peel(t) {
+            Ty::Int => format!("(<= (- 1000) {v} 1000)"),
+            Ty::Array(_) => self.small_array(t, v),
+            Ty::Record(r) => {
+                let (_, sels) = ctors(m, &Ty::Record(r)).remove(0);
+                let parts: Vec<String> = m.records[r].fields.iter().zip(sels).map(|((_, ft), sel)| self.small_depth(&ft.clone(), &format!("({sel} {v})"), depth + 1)).collect();
+                and(parts)
+            }
+            t2 @ (Ty::Enum(_) | Ty::Option(_) | Ty::Result(..)) => {
+                let cs = ctors(m, &t2);
+                let parts: Vec<String> = m
+                    .variants(&t2)
+                    .iter()
+                    .zip(cs)
+                    .filter(|((_, fs), _)| !fs.is_empty())
+                    .map(|((_, fs), (c, sels))| {
+                        let inner: Vec<String> = fs.iter().zip(sels).map(|((_, ft), sel)| self.small_depth(&ft.clone(), &format!("({sel} {v})"), depth + 1)).collect();
+                        format!("(=> ((_ is {c}) {v}) {})", and(inner))
+                    })
+                    .collect();
+                and(parts)
+            }
+            _ => "true".into(),
+        }
+    }
+
     fn new(m: &'a Module, src: &'a Source, f: &'a Func, opts: &Options, pre: &str) -> Fv<'a> {
         Fv {
             m,
@@ -1758,8 +1944,36 @@ fn pretty(m: &Module, e: &SExp) -> String {
     return pretty_inner(e, &names);
 }
 
+/// Replace `(let ((x v) ...) body)` in a model value by the body with `x` substituted.
+fn expand_lets(e: &SExp, env: &HashMap<String, SExp>) -> SExp {
+    match e {
+        SExp::Atom(a) => env.get(a).cloned().unwrap_or_else(|| e.clone()),
+        SExp::List(items) => {
+            if let [SExp::Atom(head), SExp::List(binds), body] = items.as_slice() {
+                if head == "let" {
+                    let mut inner = env.clone();
+                    for b in binds {
+                        if let SExp::List(kv) = b {
+                            if let [SExp::Atom(k), v] = kv.as_slice() {
+                                inner.insert(k.clone(), expand_lets(v, env));
+                            }
+                        }
+                    }
+                    return expand_lets(body, &inner);
+                }
+            }
+            SExp::List(items.iter().map(|x| expand_lets(x, env)).collect())
+        }
+    }
+}
+
 fn pretty_inner(e: &SExp, names: &HashMap<String, (Option<Vec<String>>, String)>) -> String {
     let go = pretty_inner;
+    if let SExp::List(items) = e {
+        if matches!(items.first(), Some(SExp::Atom(h)) if h == "let") {
+            return go(&expand_lets(e, &HashMap::new()), names);
+        }
+    }
     {
         match e {
             SExp::Atom(a) => names.get(a).map(|(_, v)| v.clone()).unwrap_or_else(|| a.clone()),
@@ -1785,6 +1999,40 @@ fn pretty_inner(e: &SExp, names: &HashMap<String, (Option<Vec<String>>, String)>
             }
         }
     }
+}
+
+/// Concrete examples of what a function's contract means, for a reviewer: what callers may
+/// assume about the result (written `ensures`, inferred ones, or a helper's exact body).
+pub struct Examples {
+    pub func: String,
+    /// Arguments and a result the contract allows.
+    pub allowed: Option<(Vec<(String, String)>, String)>,
+    /// Arguments for which the contract allows two different results, if there are any.
+    pub open: Option<(Vec<(String, String)>, String, String)>,
+    /// Proved: every allowed input has exactly one allowed result.
+    pub decided: bool,
+    /// A result the contract forbids, with the clause it breaks.
+    pub forbidden: Vec<(String, Vec<(String, String)>, String)>,
+    /// Arguments a `requires` clause rejects.
+    pub rejected: Vec<(String, Vec<(String, String)>)>,
+    pub returns_value: bool,
+}
+
+pub fn examples(m: &Module, src: &Source, opts: &Options, rep: &Report, only: Option<&str>) -> Vec<Examples> {
+    let pre = preamble(m);
+    let mut out = vec![];
+    for (fi, f) in m.funcs.iter().enumerate() {
+        if f.name == "main" || only.is_some_and(|n| n != f.name) {
+            continue;
+        }
+        let mut fv = Fv::new(m, src, f, opts, &pre);
+        fv.sandbox = true;
+        fv.contracts = rep.contracts.clone();
+        if let Some(e) = fv.examples(fi, &pre) {
+            out.push(e);
+        }
+    }
+    out
 }
 
 /// Does the current contract of `f` refine a pinned one? Returns verdicts for
