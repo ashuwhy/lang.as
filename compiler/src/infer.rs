@@ -354,58 +354,97 @@ pub fn contract_candidates(m: &Module, f: &Func, consts: &[i128], sp: Span) -> (
     (pre, post)
 }
 
-/// Functions called anywhere in `e`.
-pub fn callees(e: &TExpr) -> HashSet<usize> {
-    fn walk(e: &TExpr, out: &mut HashSet<usize>) {
-        match &e.kind {
-            TExprKind::Call(fi, xs) => {
-                out.insert(*fi);
-                xs.iter().for_each(|x| walk(x, out));
-            }
-            TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Coerce(x, _) | TExprKind::Len(x) | TExprKind::Is(x, _) => walk(x, out),
-            TExprKind::Binary(_, a, b) | TExprKind::Index(a, b) | TExprKind::ArrayRepeat(a, b) => {
-                walk(a, out);
-                walk(b, out);
-            }
-            TExprKind::Quant { lo, hi, body, .. } => {
-                walk(lo, out);
-                walk(hi, out);
-                walk(body, out);
-            }
-            TExprKind::If(c, t, f) => {
-                walk(c, out);
-                walk(t, out);
-                walk(f, out);
-            }
-            TExprKind::Match(s, arms) => {
-                walk(s, out);
-                arms.iter().for_each(|(_, b)| walk(b, out));
-            }
-            TExprKind::Record(xs) | TExprKind::Ctor(_, xs) | TExprKind::Print(xs) | TExprKind::ArrayLit(xs) => xs.iter().for_each(|x| walk(x, out)),
-            TExprKind::Update(b, fs) => {
-                walk(b, out);
-                fs.iter().for_each(|(_, x)| walk(x, out));
-            }
-            TExprKind::Block(ss, t) => {
-                for s in ss {
-                    match s {
-                        TStmt::Let(_, v) | TStmt::Assign(_, v) | TStmt::Expr(v) | TStmt::Return(v, _) | TStmt::Push(_, v, _) => walk(v, out),
-                        TStmt::IndexAssign(_, i, v, _) => {
-                            walk(i, out);
-                            walk(v, out);
-                        }
-                        TStmt::While { cond, body, .. } => {
-                            walk(cond, out);
-                            walk(body, out);
-                        }
+/// Visit every expression and statement in `e`.
+pub fn walk(e: &TExpr, on_expr: &mut dyn FnMut(&TExpr), on_stmt: &mut dyn FnMut(&TStmt)) {
+    on_expr(e);
+    match &e.kind {
+        TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Coerce(x, _) | TExprKind::Len(x) | TExprKind::Is(x, _) => walk(x, on_expr, on_stmt),
+        TExprKind::Binary(_, a, b) | TExprKind::Index(a, b) | TExprKind::ArrayRepeat(a, b) => {
+            walk(a, on_expr, on_stmt);
+            walk(b, on_expr, on_stmt);
+        }
+        TExprKind::Quant { lo, hi, body, .. } => {
+            walk(lo, on_expr, on_stmt);
+            walk(hi, on_expr, on_stmt);
+            walk(body, on_expr, on_stmt);
+        }
+        TExprKind::If(c, t, f) => {
+            walk(c, on_expr, on_stmt);
+            walk(t, on_expr, on_stmt);
+            walk(f, on_expr, on_stmt);
+        }
+        TExprKind::Match(x, arms) => {
+            walk(x, on_expr, on_stmt);
+            arms.iter().for_each(|(_, b)| walk(b, on_expr, on_stmt));
+        }
+        TExprKind::Record(xs) | TExprKind::Ctor(_, xs) | TExprKind::Call(_, xs) | TExprKind::Print(xs) | TExprKind::ArrayLit(xs) => xs.iter().for_each(|x| walk(x, on_expr, on_stmt)),
+        TExprKind::Update(b, fs) => {
+            walk(b, on_expr, on_stmt);
+            fs.iter().for_each(|(_, x)| walk(x, on_expr, on_stmt));
+        }
+        TExprKind::Block(ss, t) => {
+            for st in ss {
+                on_stmt(st);
+                match st {
+                    TStmt::Let(_, v) | TStmt::Assign(_, v) | TStmt::Expr(v) | TStmt::Return(v, _) | TStmt::Push(_, v, _) => walk(v, on_expr, on_stmt),
+                    TStmt::IndexAssign(_, i, v, _) => {
+                        walk(i, on_expr, on_stmt);
+                        walk(v, on_expr, on_stmt);
+                    }
+                    TStmt::While { cond, invariants, decreases, body, .. } => {
+                        walk(cond, on_expr, on_stmt);
+                        invariants.iter().for_each(|x| walk(x, on_expr, on_stmt));
+                        decreases.iter().for_each(|x| walk(x, on_expr, on_stmt));
+                        walk(body, on_expr, on_stmt);
                     }
                 }
-                walk(t, out);
             }
-            _ => {}
+            walk(t, on_expr, on_stmt);
         }
+        _ => {}
     }
+}
+
+/// Functions called anywhere in `e`.
+pub fn callees(e: &TExpr) -> HashSet<usize> {
     let mut out = HashSet::new();
-    walk(e, &mut out);
+    walk(e, &mut |x| {
+        if let TExprKind::Call(fi, _) = &x.kind {
+            out.insert(*fi);
+        }
+    }, &mut |_| {});
     out
+}
+
+/// Private helpers whose body callers may use as their exact contract: no loops, no
+/// recursion (direct or through other functions), and small. At a call, the verifier runs the
+/// body with the arguments, so callers know `result` exactly.
+pub fn summarizable(m: &Module) -> Vec<bool> {
+    let has_loop = |e: &TExpr| {
+        let mut found = false;
+        walk(e, &mut |_| {}, &mut |st| found |= matches!(st, TStmt::While { .. }));
+        found
+    };
+    let n = m.funcs.len();
+    let calls: Vec<HashSet<usize>> = m.funcs.iter().map(|f| callees(&f.body)).collect();
+    // A function is recursive if it can reach itself through calls.
+    let reaches_self = |f: usize| {
+        let mut seen = HashSet::new();
+        let mut todo: Vec<usize> = calls[f].iter().copied().collect();
+        while let Some(g) = todo.pop() {
+            if g == f {
+                return true;
+            }
+            if seen.insert(g) {
+                todo.extend(calls[g].iter().copied());
+            }
+        }
+        false
+    };
+    (0..n)
+        .map(|i| {
+            let f = &m.funcs[i];
+            !f.is_pub && f.name != "main" && f.body.span.hi - f.body.span.lo <= 1_000 && !has_loop(&f.body) && !reaches_self(i)
+        })
+        .collect()
 }

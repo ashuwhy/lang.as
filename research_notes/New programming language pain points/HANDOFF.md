@@ -71,18 +71,40 @@ never touches a written or pinned contract. Separation logic itself is not neede
 has value semantics (no aliasing). SepInfer's forward symbolic execution does fit one gap
 (item 1 below).
 
+Then exact summaries (`infer::summarizable`, and the `Call` case in `verify.rs`): a private
+helper with no loops, no recursion and a short body is run symbolically at each call with the
+arguments bound, so callers know its result exactly (`result == row * width + col`), which no
+template expresses. The helper's own obligations are still proved once, in the helper; while
+its body runs at a call, checks and probes are off. `examples/grid.as` indexes a flat grid
+through `at(clamp(...), clamp(...), w)` with no contract written; made `pub`, the same helpers
+fail with E0210, as they should. Inference solver batches now also have a 3 s wall-clock cap
+(past it, remaining goals count as not proved, which is fail-closed).
+
+Known limit found on the way: an element range written inside nested loops (`g[r * w + c] =
+...` inside two `for`s) is not inferred, because the inner loop's warm start comes from the
+outer loop's scalar stage, where no element facts are assumed yet. Keying warm starts by stage
+fixes the small case but made `matmul` 3x slower and lose invariants (quantified candidates
+make every query slow in that context), so it was reverted. `matmul` keeps its one
+hand-written invariant for this reason.
+
+The research report's specification-validation point applies directly: reviewers judge
+concrete examples faster than formulas. Generating a few input/output examples that a contract
+allows and one it forbids, from solver models, is cheap here (the counterexample machinery
+exists) and would make every contract, written or inferred, easier to review.
+
 Next, in order:
 
-1. Exact summaries for small loop-free private helpers (SepInfer-style forward symbolic
-   execution: callers see `result == lo + (hi - lo) / 2`, which templates cannot express), and
-   faster inference (parallel solver calls per function; `matmul` takes about 9 s).
-2. Strings, arrays inside records and enums, recursive enums (heap values in general).
-3. Generics, modules, `?`, sized integers, termination of recursion; floats.
-4. More proof-driven optimisation (`restrict` from value semantics, narrowing proved-small
+1. Review examples for contracts (`aslang explain-contract f`, and in `--show-inferred` and
+   the lock report): allowed and forbidden input/output pairs from solver models.
+2. Faster inference (parallel solver calls per function; `matmul` takes about 9 s) and the
+   nested element-range case above.
+3. Strings, arrays inside records and enums, recursive enums (heap values in general).
+4. Generics, modules, `?`, sized integers, termination of recursion; floats.
+5. More proof-driven optimisation (`restrict` from value semantics, narrowing proved-small
    integers), and benchmarks with floats and strings.
-5. The agent evaluation described in `docs/DESIGN.md` (AS vs Rust vs TypeScript on bug-prone
+6. The agent evaluation described in `docs/DESIGN.md` (AS vs Rust vs TypeScript on bug-prone
    tasks; escaped defects and total agent tokens).
-6. Consider filing the LemmaScript vacuity issue drafted at the end of
+7. Consider filing the LemmaScript vacuity issue drafted at the end of
    `phase0/lemmascript_assessment.md` (owner's decision).
 
 ## The request

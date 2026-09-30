@@ -61,8 +61,10 @@ pub fn name(a: int, b: Account) -> int
 - `pub` marks a function as part of the module's contract (pinned by `aslang lock`).
 - A private function (no `pub`) may omit its contracts: the compiler infers `requires` from
   its call sites (bounds, lengths, relations between parameters, element ranges) and `ensures`
-  from its returns, then proves them like written ones. Write contracts on `pub` functions,
-  and on private ones only to state intent. `--show-inferred` lists what was inferred.
+  from its returns, then proves them like written ones. A small private helper with no loops
+  and no recursion needs no `ensures` at all: callers see exactly the value it computes. Write
+  contracts on `pub` functions, and on private ones only to state intent. `--show-inferred`
+  lists what was inferred.
 - Contracts are optional. Every function still gets overflow, division, refinement and
   exhaustiveness checks.
 - `fn main() uses io { ... }` is the program entry point.

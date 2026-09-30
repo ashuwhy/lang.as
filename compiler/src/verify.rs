@@ -135,6 +135,10 @@ struct Fv<'a> {
     warm: Warm,
     /// Depth of exploratory runs of loop bodies (inside an outer loop's inference).
     exploring: usize,
+    /// Private helpers whose callers see their exact result (see `infer::summarizable`).
+    summarize: Vec<bool>,
+    /// Return values (path condition, value) of the helper bodies being run at a call.
+    inline_returns: Vec<Vec<(String, String)>>,
     retry: bool,
     /// Inferred invariants that failed a final proof; not offered again.
     skip: HashSet<(Span, String)>,
@@ -276,15 +280,18 @@ pub fn verify(m: &Module, src: &Source, opts: &Options) -> Report {
             skip.extend(rep.failed_contracts.drain(..));
             continue;
         }
-        let mut fis: Vec<&usize> = contracts.keys().collect();
-        fis.sort();
-        for fi in fis {
-            let (f, c) = (&m.funcs[*fi], &contracts[fi]);
-            let clauses: Vec<String> = c.pre.iter().map(|x| format!("requires {}", x.text)).chain(c.post.iter().map(|x| format!("ensures {}", x.text))).collect();
+        let summarized = if opts.infer { crate::infer::summarizable(m) } else { vec![false; m.funcs.len()] };
+        let empty = Contract::default();
+        for (fi, f) in m.funcs.iter().enumerate() {
+            let c = contracts.get(&fi).unwrap_or(&empty);
+            let mut clauses: Vec<String> = c.pre.iter().map(|x| format!("requires {}", x.text)).chain(c.post.iter().map(|x| format!("ensures {}", x.text))).collect();
+            if summarized[fi] && f.ret != Ty::Unit {
+                clauses.push("ensures result == its body (exact: callers see the value it computes)".into());
+            }
             if !clauses.is_empty() {
                 rep.inferred_contracts.push((f.sig_span, f.name.clone(), clauses));
             }
-            rep.inferred_pre.insert(*fi, c.pre.iter().map(|x| x.e.clone()).collect());
+            rep.inferred_pre.insert(fi, c.pre.iter().map(|x| x.e.clone()).collect());
         }
         return rep;
     }
@@ -378,6 +385,7 @@ fn infer_contracts(m: &Module, src: &Source, opts: &Options, pre: &str, skip: &H
     for f in &m.funcs {
         module_consts.extend(crate::infer::constants(m, f));
     }
+    let summarized = crate::infer::summarizable(m);
     let mut cs: HashMap<usize, Contract> = HashMap::new();
     for (fi, f) in m.funcs.iter().enumerate() {
         if f.is_pub || f.name == "main" {
@@ -391,6 +399,10 @@ fn infer_contracts(m: &Module, src: &Source, opts: &Options, pre: &str, skip: &H
         let (mut p, mut q) = crate::infer::contract_candidates(m, f, &consts, f.sig_span);
         if callers(fi).next().is_none() {
             p.clear();
+        }
+        if summarized[fi] {
+            // Callers see the exact result already.
+            q.clear();
         }
         p.retain(|c| !skip.contains(&(fi, format!("requires {}", c.text))));
         q.retain(|c| !skip.contains(&(fi, format!("ensures {}", c.text))));
@@ -523,13 +535,26 @@ fn simplify(m: &Module, src: &Source, opts: &Options, pre: &str, cs: &mut HashMa
 }
 
 fn run_z3(z3: &str, script: &str) -> Option<Vec<SExp>> {
+    run_z3_capped(z3, script, None)
+}
+
+/// Wall-clock cap on one batch of inference queries. A context full of quantified candidates
+/// can make every goal run to its time limit; past the cap the rest count as not proved.
+const VALID_CAP_MS: u64 = 3_000;
+
+/// With `cap_ms`, the solver is stopped after that long and only the answers it gave so far
+/// are returned; callers treat the missing ones as "not proved".
+fn run_z3_capped(z3: &str, script: &str, cap_ms: Option<u64>) -> Option<Vec<SExp>> {
     let t0 = std::time::Instant::now();
     if let Ok(dir) = std::env::var("ASLANG_DUMP") {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let _ = std::fs::write(format!("{dir}/q{n}.smt2"), script);
     }
-    let r = run_z3_inner(z3, script);
+    let r = match cap_ms {
+        None => run_z3_inner(z3, script),
+        Some(cap) => run_z3_until(z3, script, cap),
+    };
     if std::env::var("ASLANG_TRACE").is_ok() {
         eprintln!("[z3] {} bytes, {} ms, ok={}", script.len(), t0.elapsed().as_millis(), r.is_some());
     }
@@ -541,6 +566,42 @@ fn run_z3_inner(z3: &str, script: &str) -> Option<Vec<SExp>> {
     child.stdin.take()?.write_all(script.as_bytes()).ok()?;
     let out = child.wait_with_output().ok()?;
     Some(parse_sexps(&String::from_utf8_lossy(&out.stdout)))
+}
+
+fn run_z3_until(z3: &str, script: &str, cap_ms: u64) -> Option<Vec<SExp>> {
+    use std::io::Read;
+    let mut child = Command::new(z3).args(["-in", "-smt2"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut stdin = child.stdin.take()?;
+    let mut stdout = child.stdout.take()?;
+    let input = script.to_string();
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+    let reader = std::thread::spawn(move || {
+        let mut out = String::new();
+        let _ = stdout.read_to_string(&mut out);
+        out
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(cap_ms);
+    loop {
+        if child.try_wait().ok()?.is_some() {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let _ = writer.join();
+    let out = reader.join().ok()?;
+    // A cut-off last answer is dropped rather than misread.
+    let complete = match out.rfind('\n') {
+        Some(i) => &out[..=i],
+        None => "",
+    };
+    Some(parse_sexps(complete))
 }
 
 impl<'a> Fv<'a> {
@@ -564,6 +625,8 @@ impl<'a> Fv<'a> {
             skip: HashSet::new(),
             warm: HashMap::new(),
             exploring: 0,
+            summarize: if opts.infer { crate::infer::summarizable(m) } else { vec![false; m.funcs.len()] },
+            inline_returns: vec![],
             retry: false,
             started: std::time::Instant::now(),
             budget_ms: 10_000,
@@ -593,7 +656,8 @@ impl<'a> Fv<'a> {
     }
 
     fn check(&mut self, st: &St, site: Site, goal: String, what: String, fix: Option<String>, extra: Vec<(String, String)>) {
-        if self.spec || self.sandbox {
+        // A helper's body run at a call site: its own obligations are proved in the helper.
+        if self.spec || self.sandbox || !self.inline_returns.is_empty() {
             return;
         }
         let mut show = self.params_show.clone();
@@ -872,6 +936,24 @@ impl<'a> Fv<'a> {
                 let r = self.fresh(&format!("{}_ret", callee.name), &callee.ret);
                 let w = self.wf(&callee.ret.clone(), &r);
                 self.fact(&st, w);
+                if self.summarize[*fi] && self.inline_returns.len() < 4 && !self.spec {
+                    // Exact summary: run the helper's body on the arguments; `result` is what
+                    // it returns on each path.
+                    let probing = self.probe;
+                    self.probe = false;
+                    self.inline_returns.push(vec![]);
+                    let (end, v) = self.expr(&callee.body, St { pc: st.pc.clone(), env: cenv.clone() });
+                    let mut rets = self.inline_returns.pop().unwrap_or_default();
+                    self.probe = probing;
+                    if let Some(end) = end {
+                        rets.push((end.pc, v));
+                    }
+                    if callee.ret != Ty::Unit {
+                        for (pc, v) in rets {
+                            self.fact(&St { pc, env: HashMap::new() }, format!("(= {r} {v})"));
+                        }
+                    }
+                }
                 cenv.insert(callee.result, r.clone());
                 for en in callee.ensures.iter().chain(inferred.post.iter().map(|c| &c.e)) {
                     let g = self.spec_expr(en, &St { pc: "true".into(), env: cenv.clone() });
@@ -1121,7 +1203,10 @@ impl<'a> Fv<'a> {
             TStmt::Return(e, span) => {
                 let (st, v) = self.expr(e, st);
                 if let Some(st) = st {
-                    self.ensure(&st, &v, *span);
+                    match self.inline_returns.last_mut() {
+                        Some(rets) => rets.push((st.pc, v)),
+                        None => self.ensure(&st, &v, *span),
+                    }
                 }
                 None
             }
@@ -1228,7 +1313,8 @@ impl<'a> Fv<'a> {
         if trace {
             eprintln!("[loop] start {:?} sandbox={} elapsed {} ms", span, self.sandbox, self.started.elapsed().as_millis());
         }
-        let prev = self.warm.get(&span).cloned().unwrap_or_default();
+        let key = span;
+        let prev = self.warm.get(&key).cloned().unwrap_or_default();
         let mut all = match prev.full {
             // Re-exploring inside an outer loop's inference: last answer, as a fast guess.
             _ if self.exploring > 0 && !prev.pruned.is_empty() => prev.pruned.clone(),
@@ -1245,7 +1331,7 @@ impl<'a> Fv<'a> {
         if unreachable {
             // Only while contracts are still being inferred: every candidate would survive.
             // Let a later run start from scratch.
-            self.warm.remove(&span);
+            self.warm.remove(&key);
             return vec![];
         }
         if !quantified.is_empty() {
@@ -1259,7 +1345,7 @@ impl<'a> Fv<'a> {
         if trace {
             eprintln!("[loop] done {:?} -> {} found in {} ms", span, found.len(), t0.elapsed().as_millis());
         }
-        let w = self.warm.entry(span).or_default();
+        let w = self.warm.entry(key).or_default();
         w.pruned = found.clone();
         if self.exploring == 0 {
             w.full = Some(full);
@@ -1387,7 +1473,7 @@ impl<'a> Fv<'a> {
         let jobs = [script(false, 500), script(true, 150)];
         let z3 = &self.z3;
         let answers: Vec<Option<Vec<SExp>>> = std::thread::scope(|sc| {
-            let hs: Vec<_> = jobs.iter().map(|(s, slots)| sc.spawn(move || if slots.is_empty() { Some(vec![]) } else { run_z3(z3, s) })).collect();
+            let hs: Vec<_> = jobs.iter().map(|(s, slots)| sc.spawn(move || if slots.is_empty() { Some(vec![]) } else { run_z3_capped(z3, s, Some(VALID_CAP_MS)) })).collect();
             hs.into_iter().map(|h| h.join().ok().flatten()).collect()
         });
         for ((_, slots), ans) in jobs.iter().zip(answers) {

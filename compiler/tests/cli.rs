@@ -31,6 +31,7 @@ fn verified_examples_run() {
         ("examples/isqrt.as", "isqrt(99) = 9"),
         ("examples/sum.as", "sum_to(1000) = 500500"),
         ("examples/arrays.as", "primes below 1000 = 168"),
+        ("examples/grid.as", "6"),
     ] {
         let (code, out, err) = aslang(&["run", file], &root());
         assert_eq!(code, 0, "{file}: {err}");
@@ -189,4 +190,21 @@ fn contracts_of_private_functions_are_inferred_from_their_calls() {
     assert_eq!(code, 0, "{err}");
     // A public function is API: its callers here say nothing about callers elsewhere.
     expect_error("public", &ok.replace("fn get", "pub fn get"), "E0210");
+}
+
+#[test]
+fn small_helpers_are_summarized_exactly() {
+    let grid = std::fs::read_to_string(root().join("examples/grid.as")).unwrap();
+    // Off by one inside the helper: the index it computes is out of bounds at the call.
+    expect_error("grid_off_by_one", &grid.replace("row * width + col", "row * width + col + 1"), "E0210");
+    // An overflow inside a helper is still found in the helper itself.
+    let big = "fn triple(x: int) -> int {\n  x * 3_000_000_000\n}\n\nfn main() uses io {\n  io.print(triple(4_000_000_000))\n}\n";
+    expect_error("helper_overflow", big, "E0201");
+    // A public helper's body is not its contract: callers only see what it states.
+    expect_error("public_helper", &grid.replace("fn at", "pub fn at"), "E0210");
+    // A helper with a loop is not summarized; a recursive one neither.
+    let looped = "fn up(n: int) -> int {\n  var i = 0\n  while i < n\n    decreases n - i\n  {\n    i += 1\n  }\n  i\n}\n\nfn main() uses io {\n  let a = [1, 2, 3]\n  io.print(a[up(2)])\n}\n";
+    let dir = scratch("looped", looped);
+    let (_, _, err) = aslang(&["check", "--show-inferred", "looped.as"], &dir);
+    assert!(!err.contains("exact"), "{err}");
 }

@@ -86,15 +86,18 @@ versions, and all seven together are within 18% of Rust (`bench/arrays/RESULTS.m
 
 ## Built for models as well as people
 
-- **The whole language fits in 3,075 tokens.** [`llms.txt`](llms.txt) is the complete
+- **The whole language fits in 3,106 tokens.** [`llms.txt`](llms.txt) is the complete
   reference; a model that reads it can write AS.
 - **Short.** On four small programs with identical proved contracts, AS takes 230 tokens against
   Dafny's 249, Verus's 266 and Vera's 447 (`bench/tokens/`).
 - **Errors are instructions.** Every diagnostic has a stable code, a fix, and a counterexample
   where there is one, in text or `--json`; `aslang explain E0201` explains any code.
 - **Contracts you do not have to write.** Loop invariants, and the contracts of private
-  functions, are inferred and proved automatically; `--show-inferred` shows them. You write
-  contracts for the public API and for the properties you care about.
+  functions, are inferred and proved automatically, and callers of a small private helper see
+  exactly what it computes ([`examples/grid.as`](examples/grid.as) indexes through
+  `at(clamp(...), clamp(...), w)` with every index proved and no contract written).
+  `--show-inferred` shows what was inferred. You write contracts for the public API and for
+  the properties you care about.
 - **A definite finish line.** `N checks proved, 0 kept at run time` tells an agent it is done.
 - **Greppable.** Effects are called by name (`io.print`), variant names are global, there are no
   macros, overloading or implicit conversions.
