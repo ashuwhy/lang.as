@@ -1,0 +1,17 @@
+pub fn bucket_counts(values: [int], lo: int, hi: int, n: int) -> [int]
+  requires -1_000_000_000_000 <= lo && lo < hi && hi <= 1_000_000_000_000
+  requires 1 <= n && n <= 1_000 && values.len <= 1_000_000
+{
+  var out = [0; n]
+  for i in 0..values.len
+    invariant forall t in 0..out.len: 0 <= out[t] && out[t] <= i
+  {
+    let v = values[i]
+    if lo <= v && v <= hi {
+      var j = n - 1
+      if v != hi { j = (v - lo) * n / (hi - lo) }
+      out[j] += 1
+    }
+  }
+  out
+}

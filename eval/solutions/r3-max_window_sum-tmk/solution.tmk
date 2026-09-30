@@ -1,0 +1,39 @@
+// Largest sum of k consecutive elements of a.
+// Uses two running prefix sums (hi = sum of a[0..i], lo = sum of a[0..i-k]) so that
+// every intermediate value is bounded by 10^6 * 10^12 = 10^18 in magnitude, and the
+// window sum hi - lo by 2 * 10^18, all well inside 64-bit range.
+pub fn max_window_sum(a: [int], k: int) -> int
+  requires 1 <= a.len && a.len <= 1_000_000
+  requires 1 <= k && k <= a.len
+  requires forall i in 0..a.len: -1_000_000_000_000 <= a[i] && a[i] <= 1_000_000_000_000
+{
+  var hi = 0
+  var i = 0
+  while i < k
+    invariant 0 <= i && i <= k
+    invariant -1_000_000_000_000 * i <= hi && hi <= 1_000_000_000_000 * i
+    decreases k - i
+  {
+    hi += a[i]
+    i += 1
+  }
+  var best = hi
+  var lo = 0
+  var j = 0
+  while i < a.len
+    invariant k <= i && i <= a.len
+    invariant j == i - k
+    invariant -1_000_000_000_000 * i <= hi && hi <= 1_000_000_000_000 * i
+    invariant -1_000_000_000_000 * j <= lo && lo <= 1_000_000_000_000 * j
+    invariant -2_000_000_000_000_000_000 <= best && best <= 2_000_000_000_000_000_000
+    decreases a.len - i
+  {
+    hi += a[i]
+    lo += a[j]
+    let w = hi - lo
+    if w > best { best = w }
+    i += 1
+    j += 1
+  }
+  best
+}

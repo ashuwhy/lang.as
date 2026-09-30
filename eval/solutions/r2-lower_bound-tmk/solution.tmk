@@ -1,0 +1,21 @@
+// Returns the smallest index i with a[i] >= key, or a.len if none.
+// `a` must be sorted in non-decreasing order; the guarantee below is stated
+// conditionally on that so callers do not have to prove sortedness.
+pub fn lower_bound(a: [int], key: int) -> int
+  ensures 0 <= result && result <= a.len
+  ensures (forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j])
+    ==> ((forall i in 0..result: a[i] < key) && (forall i in result..a.len: a[i] >= key))
+{
+  var lo = 0
+  var hi = a.len
+  while lo < hi
+    invariant 0 <= lo && lo <= hi && hi <= a.len
+    invariant (forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j])
+      ==> ((forall i in 0..lo: a[i] < key) && (forall i in hi..a.len: a[i] >= key))
+    decreases hi - lo
+  {
+    let mid = lo + (hi - lo) / 2
+    if a[mid] < key { lo = mid + 1 } else { hi = mid }
+  }
+  lo
+}

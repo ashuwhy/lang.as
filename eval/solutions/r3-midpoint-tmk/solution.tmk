@@ -1,0 +1,17 @@
+// floor(x / 2) using truncating division
+fn half_floor(x: int) -> int {
+  let q = x / 2
+  if x % 2 < 0 { q - 1 } else { q }
+}
+
+pub fn midpoint(lo: int, hi: int) -> int
+  requires lo <= hi
+  ensures 2 * result <= lo + hi && lo + hi < 2 * result + 2
+{
+  let a = half_floor(lo)
+  let b = half_floor(hi)
+  let ra = lo - 2 * a
+  let rb = hi - 2 * b
+  let s = a + b
+  if ra + rb == 2 { s + 1 } else { s }
+}

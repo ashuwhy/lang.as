@@ -1,0 +1,3 @@
+- usability: r1-merge_sorted-tmk agent dropped 'requires sorted' because callers building arrays in loops could not prove sortedness
+- solver: ring_index agents (r1, r2) could not prove '(head + offset - result) % cap == 0' (nonlinear modulo in contracts); both rewrote it as explicit cases
+- usability: r1-lower_bound-tmk agent also dropped 'requires sorted': unprovable at callers => compile error, or a kept run-time check that compares every pair (O(n^2)); a sortedness precondition needs a cheap run-time form (adjacent pairs) and caller-side proof support

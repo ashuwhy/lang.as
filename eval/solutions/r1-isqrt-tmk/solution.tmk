@@ -1,0 +1,20 @@
+// Integer square root over the full non-negative 64-bit range.
+// floor(sqrt(2^63 - 1)) = 3_037_000_499, and 3_037_000_500^2 > 2^63 - 1,
+// so the answer always lies in [0, 3_037_000_500).
+pub fn isqrt(n: int) -> int
+  requires 0 <= n
+  ensures 0 <= result && result <= 3_037_000_499
+  ensures result * result <= n && n < (result + 1) * (result + 1)
+{
+  var lo = 0
+  var hi = 3_037_000_500
+  while hi - lo > 1
+    invariant 0 <= lo && lo < hi && hi <= 3_037_000_500
+    invariant lo * lo <= n && n < hi * hi
+    decreases hi - lo
+  {
+    let mid = lo + (hi - lo) / 2
+    if mid * mid <= n { lo = mid } else { hi = mid }
+  }
+  lo
+}

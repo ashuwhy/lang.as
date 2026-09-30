@@ -1,0 +1,13 @@
+fn fhalf(x: int) -> int {
+  if x % 2 < 0 { x / 2 - 1 } else { x / 2 }
+}
+
+fn fmod2(x: int) -> int {
+  if x % 2 < 0 { 1 } else { x % 2 }
+}
+
+pub fn midpoint(lo: int, hi: int) -> int
+  requires lo <= hi
+{
+  fhalf(lo) + fhalf(hi) + (fmod2(lo) + fmod2(hi)) / 2
+}

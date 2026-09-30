@@ -1,0 +1,31 @@
+// Returns the distinct values of `a` in increasing order.
+//
+// `a` is expected to be sorted in non-decreasing order. Sortedness is not a
+// `requires` (which every caller would have to prove); instead the ordering
+// guarantee below is conditional on sorted input. Runs in O(a.len) time.
+pub fn dedupe_sorted(a: [int]) -> [int]
+  ensures result.len <= a.len
+  ensures (forall i in 1..a.len: a[i - 1] <= a[i])
+    ==> (forall i in 1..result.len: result[i - 1] < result[i])
+  ensures forall i in 0..result.len: exists j in 0..a.len: a[j] == result[i]
+  ensures forall j in 0..a.len: exists i in 0..result.len: result[i] == a[j]
+{
+  var out: [int] = []
+  // Proof aid: pos[j] is the index in `out` holding a[j].
+  var pos = [0; a.len]
+  for k in 0..a.len
+    invariant out.len <= k
+    invariant pos.len == a.len
+    invariant k > 0 ==> out.len > 0 && out[out.len - 1] == a[k - 1]
+    invariant (forall i in 1..a.len: a[i - 1] <= a[i])
+      ==> (forall i in 1..out.len: out[i - 1] < out[i])
+    invariant forall i in 0..out.len: exists j in 0..k: a[j] == out[i]
+    invariant forall j in 0..k: 0 <= pos[j] && pos[j] < out.len && out[pos[j]] == a[j]
+  {
+    if k == 0 || a[k] != a[k - 1] {
+      out.push(a[k])
+    }
+    pos[k] = out.len - 1
+  }
+  out
+}

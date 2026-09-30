@@ -1,0 +1,40 @@
+// The total is kept as d * 2^62 + e with no intermediate overflow.
+pub fn exact_sum(a: [int]) -> int?
+  requires a.len <= 1_000_000
+{
+  let w = 4_611_686_018_427_387_904
+  var pp = 0
+  var cp = 0
+  var nn = 0
+  var cn = 0
+  for i in 0..a.len
+    invariant 0 <= cp && cp <= 2 * i && 0 <= cn && cn <= 3 * i
+    invariant 0 <= pp && pp < w && 0 <= nn && nn < w
+  {
+    let x = a[i]
+    if x >= 0 {
+      var xl = x
+      if xl >= w { xl -= w
+        cp += 1 }
+      pp += xl
+      if pp >= w { pp -= w
+        cp += 1 }
+    } else {
+      var m = -(x + 1)
+      if m >= w { m -= w
+        cn += 1 }
+      nn += m
+      if nn >= w { nn -= w
+        cn += 1 }
+      nn += 1
+      if nn >= w { nn -= w
+        cn += 1 }
+    }
+  }
+  var d = cp - cn
+  var e = pp - nn
+  if e < 0 { e += w
+    d -= 1 }
+  if d < -2 || d > 1 { return None }
+  Some(d * w + e)
+}

@@ -1,0 +1,25 @@
+// Merge two non-decreasing arrays into one non-decreasing array (stable, keeps duplicates).
+pub fn merge_sorted(a: [int], b: [int]) -> [int]
+  requires a.len <= 1_000_000
+  requires b.len <= 1_000_000
+  ensures result.len == a.len + b.len
+{
+  var out = [0; a.len + b.len]
+  var i = 0
+  var j = 0
+  while i < a.len || j < b.len
+    invariant 0 <= i && i <= a.len
+    invariant 0 <= j && j <= b.len
+    invariant out.len == a.len + b.len
+    decreases a.len + b.len - i - j
+  {
+    if j >= b.len || (i < a.len && a[i] <= b[j]) {
+      out[i + j] = a[i]
+      i += 1
+    } else {
+      out[i + j] = b[j]
+      j += 1
+    }
+  }
+  out
+}

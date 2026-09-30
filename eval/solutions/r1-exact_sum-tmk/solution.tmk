@@ -1,0 +1,27 @@
+// Exact sum of 64-bit integers, returning None when the true total does not fit in int.
+//
+// The running total is kept as `s + carry * 2^64`, where `s` is the 64-bit wrapped partial
+// sum and `carry` counts net wraparounds. Each addition changes `carry` by at most one, so
+// |carry| <= i always fits. Since `s` is always in int range, the exact total fits in int
+// exactly when `carry == 0`, and then the total is `s`.
+pub fn exact_sum(a: [int]) -> int? {
+  var s = 0
+  var carry = 0
+  for i in 0..a.len
+    invariant -i <= carry && carry <= i
+  {
+    let x = a[i]
+    if x > 0 && s > int.max - x {
+      // s + x overflows upward: store s + x - 2^64.
+      s = (s + int.min) + (x + int.min)
+      carry += 1
+    } else if x < 0 && s < int.min - x {
+      // s + x overflows downward: store s + x + 2^64.
+      s = (s - int.min) + (x - int.min)
+      carry -= 1
+    } else {
+      s += x
+    }
+  }
+  if carry == 0 { Some(s) } else { None }
+}

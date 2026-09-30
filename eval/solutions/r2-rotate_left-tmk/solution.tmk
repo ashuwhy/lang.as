@@ -1,0 +1,19 @@
+pub fn rotate_left(a: [int], k: int) -> [int]
+  requires k >= 0
+  ensures result.len == a.len
+  ensures a.len > 0 ==> forall i in 0..a.len: result[i] == a[(i + k) % a.len]
+{
+  let n = a.len
+  if n == 0 { return [] }
+  let s = k % n
+  var b = [0; n]
+  for i in 0..n
+    invariant b.len == n
+    invariant forall j in 0..i: b[j] == a[(j + k) % n]
+  {
+    var src = i + s
+    if src >= n { src = src - n }
+    b[i] = a[src]
+  }
+  b
+}

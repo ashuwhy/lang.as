@@ -1,0 +1,14 @@
+pub fn rotate_left(a: [int], k: int) -> [int]
+  requires k >= 0
+{
+  let n = a.len
+  if n == 0 { return a }
+  let s = k % n
+  var out = [0; n]
+  for i in 0..n {
+    var j = i + s
+    if j >= n { j -= n }
+    out[i] = a[j]
+  }
+  out
+}

@@ -1,0 +1,23 @@
+// Ring buffer index: (head + offset) mod cap in [0, cap), computed without overflow.
+pub fn ring_index(head: int, offset: int, cap: int) -> int
+  requires 1 <= cap && cap <= 1_000_000_000
+  requires 0 <= head && head < cap
+  ensures 0 <= result && result < cap
+  // result is congruent to head + offset modulo cap (offset % cap truncates toward zero,
+  // so it differs from offset by a multiple of cap); with the range above this is exactly
+  // (head + offset) mod cap.
+  ensures result == head + offset % cap
+       || result == head + offset % cap + cap
+       || result == head + offset % cap - cap
+{
+  // Reduce offset first so head + r cannot overflow: -cap < r < cap.
+  let r = offset % cap
+  let s = head + r          // -cap < s < 2 * cap
+  if s < 0 {
+    s + cap
+  } else if s >= cap {
+    s - cap
+  } else {
+    s
+  }
+}

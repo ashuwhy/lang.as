@@ -1,0 +1,18 @@
+pub fn max_window_sum(a: [int], k: int) -> int
+  requires 1 <= k && k <= a.len && a.len <= 1_000_000
+  requires forall i in 0..a.len: -1_000_000_000_000 <= a[i] && a[i] <= 1_000_000_000_000
+{
+  let n = a.len
+  var p = [0; n + 1]
+  for i in 0..n
+    invariant forall t in 0..i + 1: -t * 1_000_000_000_000 <= p[t] && p[t] <= t * 1_000_000_000_000
+  {
+    p[i + 1] = p[i] + a[i]
+  }
+  var best = p[k] - p[0]
+  for i in 1..n - k + 1 {
+    let s = p[i + k] - p[i]
+    if s > best { best = s }
+  }
+  best
+}

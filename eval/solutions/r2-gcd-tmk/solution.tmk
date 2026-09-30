@@ -1,0 +1,28 @@
+// Greatest common divisor of |a| and |b|.
+// Works on non-positive values internally so that int.min never has to be negated.
+fn to_nonpos(x: int) -> int
+  ensures result <= 0
+  ensures result == x || result == -x
+{
+  if x > 0 { -x } else { x }
+}
+
+pub fn gcd(a: int, b: int) -> int?
+  ensures result is Some(g) ==> g >= 0
+{
+  var x = to_nonpos(a)
+  var y = to_nonpos(b)
+  while y != 0
+    invariant x <= 0 && y <= 0
+    decreases -y
+  {
+    // y < 0 here; if y == -1 the gcd is 1 (also avoids int.min % -1)
+    if y == -1 {
+      return Some(1)
+    }
+    let r = x % y
+    x = y
+    y = r
+  }
+  if x == int.min { None } else { Some(-x) }
+}

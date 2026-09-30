@@ -1,0 +1,32 @@
+// Merge two non-decreasing arrays into one non-decreasing array (duplicates kept).
+// Accepts any arrays within the length bound; the result is sorted whenever both inputs are.
+pub fn merge_sorted(a: [int], b: [int]) -> [int]
+  requires a.len <= 1_000_000 && b.len <= 1_000_000
+  ensures result.len == a.len + b.len
+  ensures ((forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j]) &&
+           (forall i in 0..b.len: forall j in i..b.len: b[i] <= b[j])) ==>
+          (forall i in 0..result.len: forall j in i..result.len: result[i] <= result[j])
+{
+  var out: [int] = []
+  var i = 0
+  var j = 0
+  while i < a.len || j < b.len
+    invariant 0 <= i && i <= a.len && 0 <= j && j <= b.len
+    invariant out.len == i + j
+    invariant ((forall p in 0..a.len: forall q in p..a.len: a[p] <= a[q]) &&
+               (forall p in 0..b.len: forall q in p..b.len: b[p] <= b[q])) ==>
+              ((forall p in 0..out.len: forall q in p..out.len: out[p] <= out[q]) &&
+               (forall p in 0..out.len: forall q in i..a.len: out[p] <= a[q]) &&
+               (forall p in 0..out.len: forall q in j..b.len: out[p] <= b[q]))
+    decreases a.len + b.len - i - j
+  {
+    if j >= b.len || (i < a.len && a[i] <= b[j]) {
+      out.push(a[i])
+      i += 1
+    } else {
+      out.push(b[j])
+      j += 1
+    }
+  }
+  out
+}

@@ -1,0 +1,21 @@
+pub fn merge_sorted(a: [int], b: [int]) -> [int]
+  requires a.len <= 1_000_000 && b.len <= 1_000_000
+{
+  var out = [0; a.len + b.len]
+  var i = 0
+  var j = 0
+  var k = 0
+  while k < a.len + b.len
+    invariant i + j == k && 0 <= i && i <= a.len && 0 <= j && j <= b.len
+  {
+    if j >= b.len || (i < a.len && a[i] <= b[j]) {
+      out[k] = a[i]
+      i += 1
+    } else {
+      out[k] = b[j]
+      j += 1
+    }
+    k += 1
+  }
+  out
+}

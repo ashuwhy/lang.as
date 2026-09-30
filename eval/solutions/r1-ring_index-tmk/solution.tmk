@@ -1,0 +1,18 @@
+// Ring buffer index: (head + offset) mod cap, in [0, cap), computed exactly.
+// `offset` is reduced first (offset % cap, which truncates toward zero, so
+// -cap < r < cap); head + r then lies in (-cap, 2*cap) and cannot overflow,
+// even for offset == int.min or int.max. One correction step lands it in [0, cap).
+pub fn ring_index(head: int, offset: int, cap: int) -> int
+  requires 1 <= cap && cap <= 1_000_000_000
+  requires 0 <= head && head < cap
+  ensures 0 <= result && result < cap
+  ensures result == head + offset % cap
+       || result == head + offset % cap + cap
+       || result == head + offset % cap - cap
+{
+  let r = offset % cap
+  var s = head + r
+  if s < 0 { s = s + cap }
+  if s >= cap { s = s - cap }
+  s
+}

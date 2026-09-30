@@ -1,0 +1,20 @@
+// Floor of x / 2 (rounds toward negative infinity), without overflow.
+fn half_floor(x: int) -> int
+  ensures 2 * result <= x && x <= 2 * result + 1
+{
+  let q = x / 2
+  if x % 2 != 0 && x < 0 { q - 1 } else { q }
+}
+
+pub fn midpoint(lo: int, hi: int) -> int
+  requires lo <= hi
+  ensures 2 * result <= lo + hi && lo + hi < 2 * result + 2
+  ensures lo <= result && result <= hi
+{
+  let a = half_floor(lo)
+  let b = half_floor(hi)
+  let ra = lo - 2 * a
+  let rb = hi - 2 * b
+  let carry = if ra == 1 && rb == 1 { 1 } else { 0 }
+  a + b + carry
+}

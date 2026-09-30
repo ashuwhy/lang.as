@@ -1,0 +1,13 @@
+// floor(amount * bps / 10_000) without overflowing 64-bit arithmetic.
+// amount * bps can reach 10^19 > int.max, so split amount = q * 10_000 + r:
+//   floor(amount * bps / 10_000) = q * bps + floor(r * bps / 10_000)
+pub fn percent_of(amount: int, bps: int) -> int
+  requires 0 <= amount && amount <= 1_000_000_000_000_000
+  requires 0 <= bps && bps <= 10_000
+  ensures result * 10_000 <= amount * bps
+  ensures amount * bps < (result + 1) * 10_000
+{
+  let q = amount / 10_000
+  let r = amount % 10_000
+  q * bps + (r * bps) / 10_000
+}

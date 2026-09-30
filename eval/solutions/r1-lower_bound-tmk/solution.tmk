@@ -1,0 +1,32 @@
+// lower_bound: smallest index i with a[i] >= key, or a.len if none.
+//
+// The specification promises `a` is sorted in non-decreasing order. That is
+// deliberately not a `requires`: callers holding arrays built at run time
+// could not prove it, and a kept run-time check of it would cost far more than
+// the O(log n) search. Instead the function is total, and its contract says:
+//   * always: the result is a boundary, i.e. a[result-1] < key <= a[result]
+//     (with the out-of-range sides vacuous), and
+//   * when `a` is sorted: every element before the result is < key and every
+//     element from the result on is >= key, which is exactly the lower bound.
+pub fn lower_bound(a: [int], key: int) -> int
+  ensures 0 <= result && result <= a.len
+  ensures result == 0 || a[result - 1] < key
+  ensures result == a.len || a[result] >= key
+  ensures (forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j])
+    ==> (forall i in 0..result: a[i] < key)
+  ensures (forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j])
+    ==> (forall i in result..a.len: a[i] >= key)
+{
+  var lo = 0
+  var hi = a.len
+  while lo < hi
+    invariant lo == 0 || a[lo - 1] < key
+    invariant hi == a.len || a[hi] >= key
+    decreases hi - lo
+  {
+    // lo < hi <= a.len <= int.max, so hi - lo cannot overflow and mid is in [lo, hi)
+    let mid = lo + (hi - lo) / 2
+    if a[mid] < key { lo = mid + 1 } else { hi = mid }
+  }
+  lo
+}

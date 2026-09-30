@@ -1,0 +1,21 @@
+// gcd over the full 64-bit domain. Works on non-positive values so that
+// int.min never has to be negated; only the final result is negated.
+pub fn gcd(a: int, b: int) -> int?
+  ensures result is Some(g) ==> g >= 0
+  ensures (a == 0 && b == 0) ==> result == Some(0)
+{
+  var x = if a > 0 { -a } else { a }   // x = -|a|, never overflows
+  var y = if b > 0 { -b } else { b }   // y = -|b|
+  while y != 0
+    invariant x <= 0 && y <= 0
+    invariant (a == 0 && b == 0) ==> (x == 0 && y == 0)
+  {
+    if y == -1 { return Some(1) }      // avoids int.min % -1
+    let r = x % y
+    x = y
+    y = r
+  }
+  // x = -gcd(|a|, |b|)
+  if x == int.min { return None }
+  Some(-x)
+}

@@ -1,0 +1,8 @@
+pub fn ring_index(head: int, offset: int, cap: int) -> int
+  requires 1 <= cap && cap <= 1_000_000_000
+  requires 0 <= head && head < cap
+{
+  var m = offset % cap
+  if m < 0 { m += cap }
+  (head + m) % cap
+}

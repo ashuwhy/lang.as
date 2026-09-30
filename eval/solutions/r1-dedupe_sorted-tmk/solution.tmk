@@ -1,0 +1,31 @@
+// Returns the distinct values of a sorted (non-decreasing) array, in increasing order.
+// An element is kept only when it is strictly greater than the last kept one, so the
+// result is strictly increasing for any input; for sorted input it is exactly the
+// set of distinct values.
+pub fn dedupe_sorted(a: [int]) -> [int]
+  ensures result.len <= a.len
+  ensures forall i in 0..result.len: forall j in i + 1..result.len: result[i] < result[j]
+  ensures forall k in 0..result.len: exists i in 0..a.len: a[i] == result[k]
+  ensures (a.len > 0) == (result.len > 0)
+  ensures (forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j])
+    ==> forall i in 0..a.len: exists k in 0..result.len: result[k] == a[i]
+{
+  var out: [int] = []
+  for i in 0..a.len
+    invariant out.len <= i
+    invariant forall p in 0..out.len: forall q in p + 1..out.len: out[p] < out[q]
+    invariant forall k in 0..out.len: exists j in 0..i: a[j] == out[k]
+    invariant (i > 0) == (out.len > 0)
+    invariant (forall p in 0..a.len: forall q in p..a.len: a[p] <= a[q])
+      ==> forall j in 0..i: exists k in 0..out.len: out[k] == a[j]
+    invariant (forall p in 0..a.len: forall q in p..a.len: a[p] <= a[q]) && i > 0
+      ==> out[out.len - 1] == a[i - 1]
+  {
+    if out.len == 0 {
+      out.push(a[i])
+    } else if a[i] > out[out.len - 1] {
+      out.push(a[i])
+    }
+  }
+  out
+}

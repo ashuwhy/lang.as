@@ -1,0 +1,18 @@
+// floor(x / 2) for any 64-bit x, without overflow.
+fn half_floor(x: int) -> int
+  ensures 2 * result <= x && x < 2 * result + 2
+{
+  let q = x / 2
+  if x % 2 != 0 && x < 0 { q - 1 } else { q }
+}
+
+pub fn midpoint(lo: int, hi: int) -> int
+  requires lo <= hi
+  ensures 2 * result <= lo + hi && lo + hi < 2 * result + 2
+{
+  let qa = half_floor(lo)
+  let qb = half_floor(hi)
+  let ra = lo - 2 * qa
+  let rb = hi - 2 * qb
+  if ra == 1 && rb == 1 { qa + qb + 1 } else { qa + qb }
+}

@@ -1,0 +1,9 @@
+pub fn lower_bound(a: [int], key: int) -> int {
+  var lo = 0
+  var hi = a.len
+  while lo < hi {
+    let mid = lo + (hi - lo) / 2
+    if a[mid] < key { lo = mid + 1 } else { hi = mid }
+  }
+  lo
+}
