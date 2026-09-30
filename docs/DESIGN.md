@@ -203,7 +203,7 @@ from the same checked IR.
 | Diagnostics as instructions, in text and JSON; `aslang explain` | yes |
 | Named arguments checked against parameter names | yes |
 | Proved facts passed to the C optimiser; proved-safe 32-bit and unsigned division | yes |
-| `llms.txt`: the complete reference (3,194 tokens at v0.2) | yes |
+| `llms.txt`: the complete reference (3,212 tokens at v0.2) | yes |
 | Arrays with proved bounds, reference counting, copy-on-write, last-use moves; `for` loops; `forall`/`exists` | done (v0.2) |
 | Loop-invariant inference (Houdini over templates; inferred invariants are re-proved) | done (v0.2) |
 | Contract inference for private functions (Houdini across the module: `requires` from call sites, `ensures` from returns; re-proved) | done (v0.2) |

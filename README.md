@@ -71,7 +71,7 @@ Each line below is a test in `compiler/tests/cli.rs`.
 | The midpoint bug that sat in Java's `Arrays.binarySearch` for nine years, `(lo + hi) / 2` | `E0201` overflow, counterexample `lo = hi = int.max` |
 | A pure function that starts printing | `E0106` effect not declared |
 | A loop invariant that does not hold, a loop that may not end | `E0207`, `E0208` |
-| An agent weakens a pinned `ensures` to hide a bug | `E0301` contract WEAKER than the pinned one, with a result the new contract allows and the old one forbids |
+| An agent weakens a pinned `ensures` to hide a bug | `E0301` contract WEAKER than the pinned one: the removed and added clauses, a result the new contract allows and the old one forbids, and, if the pinned contract decided every result, an input that now has two |
 | A pinned function gains an effect | `E0303` |
 | `while j <= n` writing `composite[j]` in a sieve | `E0210` index may be out of bounds |
 | An unsorted array passed to a binary search that requires sorted input | `E0203`, at the call |
@@ -108,7 +108,7 @@ versions, and all seven together are within 18% of Rust (`bench/arrays/RESULTS.m
 
 ## Built for models as well as people
 
-- **The whole language fits in 3,194 tokens.** [`llms.txt`](llms.txt) is the complete
+- **The whole language fits in 3,212 tokens.** [`llms.txt`](llms.txt) is the complete
   reference; a model that reads it can write AS.
 - **Short.** On four small programs with identical proved contracts, AS takes 230 tokens against
   Dafny's 249, Verus's 266 and Vera's 447 (`bench/tokens/`).
@@ -135,6 +135,7 @@ cargo build --release
 ./target/release/aslang check examples/ledger.as     # prove
 ./target/release/aslang run examples/ledger.as       # prove, compile, run
 ./target/release/aslang lock examples/ledger.as      # pin public contracts in aslang.lock
+./target/release/aslang examples examples/ledger.as  # what each contract allows and forbids
 ./target/release/aslang check --json examples/bugs/midpoint.as
 ./target/release/aslang explain E0301
 cargo test                                            # end-to-end tests

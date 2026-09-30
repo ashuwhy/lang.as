@@ -111,11 +111,22 @@ pub fn check_against(prog: &Program, src: &Source, m: &Module, pinned: &Value, o
             continue;
         };
         let show = |xs: &[String]| if xs.is_empty() { "true".to_string() } else { xs.join(" && ") };
+        // Clause by clause, what changed: a reviewer reads the difference, not both contracts.
+        let diff = |kw: &str, old: &[String], new: &[String]| -> Vec<String> {
+            let norm = |x: &String| x.split_whitespace().collect::<Vec<_>>().join(" ");
+            let (o, n): (Vec<String>, Vec<String>) = (old.iter().map(norm).collect(), new.iter().map(norm).collect());
+            let mut out: Vec<String> = o.iter().filter(|x| !n.contains(x)).map(|x| format!("removed:  {kw} {x}")).collect();
+            out.extend(n.iter().filter(|x| !o.contains(x)).map(|x| format!("added:    {kw} {x}")));
+            out
+        };
+        let pre_ok = pre == Verdict::Proved;
         match pre {
             Verdict::Refuted(ce) => {
-                let mut d = Diagnostic::error("E0302", f.sig_span, format!("`{name}` now demands more from its callers than its pinned contract"))
-                    .with_note(format!("pinned requires:   {}", show(&oreq)))
-                    .with_note(format!("proposed requires: {}", show(&f.requires_src)))
+                let mut d = Diagnostic::error("E0302", f.sig_span, format!("`{name}` now demands more from its callers than its pinned contract"));
+                for line in diff("requires", &oreq, &f.requires_src) {
+                    d = d.with_note(line);
+                }
+                d = d
                     .with_note("the counterexample is a call that was allowed before and is rejected now")
                     .with_fix("keep the pinned precondition, or have an owner approve the change and run `aslang lock`");
                 d.counterexample = ce;
@@ -126,17 +137,22 @@ pub fn check_against(prog: &Program, src: &Source, m: &Module, pinned: &Value, o
         }
         match post {
             Verdict::Refuted(ce) => {
-                let mut d = Diagnostic::error("E0301", f.sig_span, format!("the contract of `{name}` is WEAKER than the pinned one"))
-                    .with_note(format!("pinned ensures:   {}", show(&oens)))
-                    .with_note(format!("proposed ensures: {}", show(&f.ensures_src)))
-                    .with_note("the counterexample is a result the new contract allows and the pinned one forbids")
+                let mut d = Diagnostic::error("E0301", f.sig_span, format!("the contract of `{name}` is WEAKER than the pinned one"));
+                for line in diff("ensures", &oens, &f.ensures_src) {
+                    d = d.with_note(line);
+                }
+                d = d.with_note("the counterexample is a result the new contract allows and the pinned one forbids");
+                if let Some(note) = lost_determinism(&m2, src, f, &ens, &oens, opts) {
+                    d = d.with_note(note);
+                }
+                d = d
                     .with_fix("restore the pinned guarantee; a weaker contract needs an owner-approved `aslang lock`");
                 d.counterexample = ce;
                 diags.push(d);
             }
             Verdict::Unknown => diags.push(Diagnostic::warning("W0250", f.sig_span, format!("could not decide whether the contract of `{name}` still refines the pin"))),
             Verdict::Proved => {
-                if show(&oens) != show(&f.ensures_src) || show(&oreq) != show(&f.requires_src) {
+                if pre_ok && (show(&oens) != show(&f.ensures_src) || show(&oreq) != show(&f.requires_src)) {
                     notes.push(format!("`{name}`: contract changed and still refines the pin; run `aslang lock` to pin the stronger version"));
                 }
             }
@@ -146,6 +162,24 @@ pub fn check_against(prog: &Program, src: &Source, m: &Module, pinned: &Value, o
         notes.push(format!("`{}` is public but not pinned yet; run `aslang lock`", f.name));
     }
     (diags, notes)
+}
+
+/// If the pinned contract decided every result and the proposed one does not, say so with an
+/// input that now has two allowed results.
+fn lost_determinism(m: &Module, src: &Source, f: &crate::tir::Func, pinned_ens: &[crate::tir::TExpr], pinned_src: &[String], opts: &Options) -> Option<String> {
+    let fi = m.funcs.iter().position(|g| g.name == f.name)?;
+    let none = crate::verify::Report::default();
+    let now = crate::verify::examples(m, src, opts, &none, Some(&f.name)).pop()?;
+    let (args, r1, r2) = now.open?;
+    let mut old = m.clone();
+    old.funcs[fi].ensures = pinned_ens.to_vec();
+    old.funcs[fi].ensures_src = pinned_src.to_vec();
+    let before = crate::verify::examples(&old, src, opts, &none, Some(&f.name)).pop()?;
+    if !before.decided {
+        return None;
+    }
+    let call = format!("{}({})", f.name, args.iter().map(|(n, v)| format!("{n}: {v}")).collect::<Vec<_>>().join(", "));
+    Some(format!("the pinned contract decided every result; the proposed one does not: {call} may now return {r1} or {r2}"))
 }
 
 fn find_decl(src: &Source, name: &str) -> crate::diag::Span {

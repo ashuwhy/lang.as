@@ -76,6 +76,10 @@ fn lock_rejects_weakened_contract() {
     let (code, _, err) = aslang(&["check", "locked.as"], &dir);
     assert_eq!(code, 1);
     assert!(err.contains("error[E0301]"), "{err}");
+    // The report shows what changed and what a reviewer loses.
+    assert!(err.contains("removed:  ensures result is Ok(m) ==> m.to == ({ ...to, balance: to.balance + amount })"), "{err}");
+    assert!(err.contains("added:    ensures result is Ok(m) ==> m.to.balance <= to.balance + amount"), "{err}");
+    assert!(err.contains("the pinned contract decided every result; the proposed one does not"), "{err}");
 
     // Adding an effect to a pinned function is also caught.
     let effectful = example("examples/ledger.as").replace("-> Result<Moved, TransferError>\n", "-> Result<Moved, TransferError>\n  uses io\n");
@@ -224,4 +228,15 @@ fn examples_show_what_a_contract_allows() {
     let (_, out, _) = aslang(&["examples", "--json", "--fn", "at", "examples/grid.as"], &root());
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["examples"][0]["decided"], true, "{out}");
+}
+
+#[test]
+fn lock_points_out_open_contracts() {
+    let dir = scratch("open", &example("examples/arrays.as"));
+    let (code, _, err) = aslang(&["lock", "open.as"], &dir);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("the pinned contract of `sum` does not decide its result"), "{err}");
+    let dir = scratch("decided", &example("examples/ledger.as"));
+    let (_, _, err) = aslang(&["lock", "decided.as"], &dir);
+    assert!(!err.contains("does not decide"), "{err}");
 }

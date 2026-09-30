@@ -357,10 +357,27 @@ fn main() {
                 eprintln!("cannot write {}: {e}", path.display());
                 exit(1)
             });
-            let n = o.module.as_ref().unwrap().funcs.iter().filter(|f| f.is_pub).count();
-            report(&a, &o, json!({ "lock": path, "pinned_functions": n }));
+            let m = o.module.as_ref().unwrap();
+            let n = m.funcs.iter().filter(|f| f.is_pub).count();
+            // Pinning an open contract pins its gap too; say where it is.
+            let mut open = vec![];
+            if let Some(r) = &o.report {
+                let opts = Options { timeout_ms: a.timeout, infer: a.infer, ..Default::default() };
+                for f in m.funcs.iter().filter(|f| f.is_pub && f.ret != aslang::tir::Ty::Unit) {
+                    if let Some(e) = aslang::verify::examples(m, &o.src, &opts, r, Some(&f.name)).pop() {
+                        if let Some((args, r1, r2)) = e.open {
+                            let call = format!("{}({})", e.func, args.iter().map(|(n, v)| format!("{n}: {v}")).collect::<Vec<_>>().join(", "));
+                            open.push(json!({ "function": e.func, "call": call, "results": [r1, r2] }));
+                        }
+                    }
+                }
+            }
+            report(&a, &o, json!({ "lock": path, "pinned_functions": n, "open_contracts": open }));
             if !a.json {
                 eprintln!("pinned {n} public function(s) in {}", path.display());
+                for x in &open {
+                    eprintln!("note: the pinned contract of `{}` does not decide its result: {} may return {} or {}; add an `ensures` if that is not intended (`aslang examples` shows more)", x["function"].as_str().unwrap_or(""), x["call"].as_str().unwrap_or(""), x["results"][0].as_str().unwrap_or(""), x["results"][1].as_str().unwrap_or(""));
+                }
             }
         }
         other => {

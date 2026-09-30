@@ -140,7 +140,8 @@ a.len                                  // length
 - `aslang examples file.as [--fn name]` shows what each contract means: an allowed call and
   result, results it forbids, inputs each `requires` rejects, and either `decided` (every
   input has exactly one allowed result) or `open` (two allowed results for the same input).
-  An `open` result you did not intend means an `ensures` is missing.
+  An `open` result you did not intend means an `ensures` is missing. `aslang lock` notes
+  every public contract it pins that is `open`.
 - Verdicts: proved (no run-time cost), refuted (compile error with a counterexample), unknown
   (warning W0250; a run-time check is kept). `--proved` rejects unknowns.
 - Recursive functions are checked for partial correctness; termination of recursion is not yet

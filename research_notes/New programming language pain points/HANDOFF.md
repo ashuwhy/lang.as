@@ -102,10 +102,26 @@ Run on `examples/ledger.as` it found three gaps in the flagship contract (ids of
 accounts not pinned, the `Insufficient` shortfall not pinned, `Err(Insufficient(0))` allowed
 when the money was there); with three more `ensures` lines the contract is now `decided`.
 
+The lock report now uses them. A weakening (E0301) or a stronger precondition (E0302) lists
+the removed and added clauses instead of both whole contracts, keeps the counterexample's
+values small, and, when the pinned contract was `decided` and the proposed one is `open`, shows
+an input that now has two allowed results. `aslang lock` notes every public contract it pins
+that is `open` (on `examples/arrays.as`: `sum` and `count_primes`, and `search`, which is open
+on purpose).
+
+Naming, for the owner to decide (asked 2026-09-30): GitHub's language bar comes from
+Linguist, which adds a language only after "at least 2000 files per extension ... indexed in
+the last year, excluding forks" (200 for one-file-per-repo extensions) across many repos, so
+it cannot be registered up front. Linguist already gives `.as` to ActionScript and AngelScript,
+so AS files are mislabelled today (`*.as linguist-detectable=false` in `.gitattributes` hides
+them). "AS" is also unsearchable and a keyword in Rust, Python, TypeScript and SQL. If the
+language is renamed, now is the cheap time: a coined word whose extension is not in Linguist's
+`languages.yml` and whose name is free on crates.io, npm and GitHub (vow, oath, tenet, pact,
+vouch and sworn are all taken on both registries).
+
 Next, in order:
 
-1. Show examples where they are needed without asking: in the lock report next to a
-   weakening, and as a note on a `pub` function whose contract is `open`.
+1. The name (owner's decision above); then rename the extension, CLI and docs in one commit.
 2. Faster inference (parallel solver calls per function; `matmul` takes about 9 s) and the
    nested element-range case above.
 3. Strings, arrays inside records and enums, recursive enums (heap values in general).

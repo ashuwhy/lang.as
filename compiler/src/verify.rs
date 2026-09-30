@@ -2067,7 +2067,7 @@ pub fn check_refinement(m: &Module, src: &Source, f: &Func, old_req: &[TExpr], o
     let pvals = if params.is_empty() { "0".to_string() } else { params.join(" ") };
     let mut script = format!("{}(set-option :timeout {})\n", preamble(m), opts.timeout_ms);
     script += &fv.decls.join("\n");
-    let small = fv.small();
+    let small = format!("(and {} {})", fv.small(), fv.small_value(&f.ret.clone(), &r));
     script += &format!("\n(assert {wf})\n(push 1)\n(assert {oreq})\n(assert (not {nreq}))\n(check-sat)\n(get-value ({pvals}))\n(assert {small})\n(check-sat)\n(get-value ({pvals}))\n(pop 1)\n");
     script += &format!("(push 1)\n(assert {oreq})\n(assert {nens})\n(assert (not {oens}))\n(check-sat)\n(get-value ({pvals} {r}))\n(assert {small})\n(check-sat)\n(get-value ({pvals} {r}))\n(pop 1)\n");
     let ans = run_z3(&opts.z3, &script)?;
