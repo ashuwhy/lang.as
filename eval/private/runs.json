@@ -421,7 +421,9 @@
   "lang": "touchmark",
   "trial": 3,
   "dir": "/work/r3-ring_index-tmk",
-  "agent": "a50a67e7b489c482a"
+  "agent": "afc2e19c8f0a4ac12",
+  "superseded_agent": "a50a67e7b489c482a",
+  "rerun": "2026-10-01 new session, same prompt"
  },
  {
   "id": "r3-ring_index-rs",
@@ -485,7 +487,9 @@
   "lang": "touchmark",
   "trial": 3,
   "dir": "/work/r3-dedupe_sorted-tmk",
-  "agent": "a9b8c484582a32ba4"
+  "agent": "a0fb6689afda808dc",
+  "superseded_agent": "a9b8c484582a32ba4",
+  "rerun": "2026-10-01 new session, same prompt"
  },
  {
   "id": "r3-dedupe_sorted-rs",
@@ -501,7 +505,9 @@
   "lang": "touchmark",
   "trial": 3,
   "dir": "/work/r3-merge_sorted-tmk",
-  "agent": "a45694e03e53856ba"
+  "agent": "a4b9cd2ed3a3089fa",
+  "superseded_agent": "a45694e03e53856ba",
+  "rerun": "2026-10-01 new session, same prompt"
  },
  {
   "id": "r3-merge_sorted-rs",
@@ -533,7 +539,9 @@
   "lang": "touchmark",
   "trial": 3,
   "dir": "/work/r3-exact_sum-tmk",
-  "agent": "a4308a88b5c923c21"
+  "agent": "a3a43a131e21ef6e5",
+  "superseded_agent": "a4308a88b5c923c21",
+  "rerun": "2026-10-01 new session, same prompt"
  },
  {
   "id": "r3-exact_sum-rs",
@@ -541,7 +549,9 @@
   "lang": "rust",
   "trial": 3,
   "dir": "/work/r3-exact_sum-rs",
-  "agent": "ad073ec999d02b413"
+  "agent": "ab63ac030c9b0c0da",
+  "superseded_agent": "ad073ec999d02b413",
+  "rerun": "2026-10-01 new session, same prompt"
  },
  {
   "id": "r3-gcd-tmk",
@@ -549,7 +559,9 @@
   "lang": "touchmark",
   "trial": 3,
   "dir": "/work/r3-gcd-tmk",
-  "agent": "ab5b07114d71c3cac"
+  "agent": "a49f063bb140098d9",
+  "superseded_agent": "ab5b07114d71c3cac",
+  "rerun": "2026-10-01 new session, same prompt"
  },
  {
   "id": "r3-gcd-rs",
@@ -557,7 +569,9 @@
   "lang": "rust",
   "trial": 3,
   "dir": "/work/r3-gcd-rs",
-  "agent": "a199fb236152c2600"
+  "agent": "adfbb90e39da64c47",
+  "superseded_agent": "a199fb236152c2600",
+  "rerun": "2026-10-01 new session, same prompt"
  },
  {
   "id": "r3-isqrt-tmk",
@@ -565,7 +579,9 @@
   "lang": "touchmark",
   "trial": 3,
   "dir": "/work/r3-isqrt-tmk",
-  "agent": "aeb9fdf5a82f09635"
+  "agent": "a01f8f2334d1cfe63",
+  "superseded_agent": "aeb9fdf5a82f09635",
+  "rerun": "2026-10-01 new session, same prompt"
  },
  {
   "id": "r3-isqrt-rs",
@@ -573,6 +589,8 @@
   "lang": "rust",
   "trial": 3,
   "dir": "/work/r3-isqrt-rs",
-  "agent": "a57288a9058f85f4a"
+  "agent": "a8d6a1574e7ac3e93",
+  "superseded_agent": "a57288a9058f85f4a",
+  "rerun": "2026-10-01 new session, same prompt"
  }
 ]

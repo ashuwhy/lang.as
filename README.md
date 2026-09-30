@@ -130,6 +130,24 @@ versions, and all seven together are within 18% of Rust (`bench/arrays/RESULTS.m
 - **Greppable.** Effects are called by name (`io.print`), variant names are global, there are no
   macros, overloading or implicit conversions.
 
+## Does it help agents? Round 1 says: not yet shown
+
+I pre-registered a test ([`eval/PROTOCOL.md`](eval/PROTOCOL.md)): 12 small tasks built to provoke
+overflow, off-by-one, negative modulo and empty-array bugs, three trials each, one fresh agent per run
+writing Touchmark or Rust, scored on hidden tests. Results in [`eval/RESULTS.md`](eval/RESULTS.md).
+
+| Arm | Runs | Runs with a defect | Hidden tests passed | T_work mean | Tool calls mean |
+|---|---|---|---|---|---|
+| Touchmark | 36 | 0 | 789/789 | 13,386 | 6.9 |
+| Rust | 36 | 0 | 789/789 | 3,765 | 2.5 |
+
+0 of 36 Touchmark runs and 0 of 36 Rust runs shipped an escaped defect (Fisher's exact test p = 1.0).
+Both arms are at ceiling, so the defect question is unanswered. Touchmark cost 3.6x the task-specific
+tokens of Rust (T_work 13,386 vs 3,765; 3.0x in the first-session runs alone) and 2.7x the tool calls.
+The hypothesis that Touchmark lowers token cost is not supported. The runs also found where the
+language gets in the way (sortedness preconditions nobody could use, modulo contracts that would not
+prove, no sums in contracts), and those drive round 2, which needs harder tasks.
+
 ## Use it
 
 Requires Rust (to build the compiler), a C compiler (gcc or clang) and `z3` on `PATH`.

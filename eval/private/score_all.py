@@ -2,7 +2,7 @@
 import json, os, sys
 import harness as h
 from usage import usage
-T = "/tmp/claude-0/-home-user/d731a20c-31ee-5d9f-a9b0-dc9fb0735b5b/tasks"
+T = "/private/tmp/claude-501/-Volumes-part-one-Coding-Projects-lang-as/81c3387e-5192-4c2d-aca4-3fa6920cf370/tasks"
 runs = json.load(open("runs.json"))
 res = json.load(open("results.json")) if os.path.exists("results.json") else {}
 only = set(sys.argv[1:])

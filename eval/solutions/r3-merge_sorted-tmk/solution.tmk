@@ -1,0 +1,28 @@
+pub fn merge_sorted(a: [int], b: [int]) -> [int]
+  ensures a.len + b.len <= 1_099_511_627_776 ==> result.len == a.len + b.len
+  ensures (forall p in 1..a.len: a[p - 1] <= a[p]) && (forall p in 1..b.len: b[p - 1] <= b[p])
+    ==> forall p in 1..result.len: result[p - 1] <= result[p]
+{
+  // An array holds at most 2^40 elements, so a merge longer than that has no
+  // representation. Inputs within the spec (1_000_000 each) never get close.
+  if a.len + b.len > 1_099_511_627_776 { return [0; 0] }
+  var out = [0; a.len + b.len]
+  var i = 0
+  var j = 0
+  while i < a.len || j < b.len
+    invariant (forall p in 1..a.len: a[p - 1] <= a[p]) && (forall p in 1..b.len: b[p - 1] <= b[p])
+      ==> (forall p in 1..i + j: out[p - 1] <= out[p])
+        && (i + j > 0 && i < a.len ==> out[i + j - 1] <= a[i])
+        && (i + j > 0 && j < b.len ==> out[i + j - 1] <= b[j])
+    decreases a.len + b.len - i - j
+  {
+    if j == b.len || (i < a.len && a[i] <= b[j]) {
+      out[i + j] = a[i]
+      i += 1
+    } else {
+      out[i + j] = b[j]
+      j += 1
+    }
+  }
+  out
+}

@@ -1,0 +1,24 @@
+// Euclid runs on non-positive values: every int has a non-positive
+// magnitude, but int.min has no positive one.
+pub fn gcd(a: int, b: int) -> int?
+  ensures result is Some(g) ==> g >= 0
+  ensures (result is Some(g) && g == 0) == (a == 0 && b == 0)
+  ensures (result is None) == ((a == 0 || a == int.min) && (b == 0 || b == int.min)
+                               && !(a == 0 && b == 0))
+{
+  if a == 0 && b == 0 { return Some(0) }
+  // Here the gcd is 2^63, one past int.max.
+  if (a == 0 || a == int.min) && (b == 0 || b == int.min) { return None }
+  var x = if a > 0 { -a } else { a }
+  var y = if b > 0 { -b } else { b }
+  while y != 0
+    invariant (int.min < x && x < 0) || (int.min < y && y < 0)
+  {
+    // int.min % -1 is an overflow, and the gcd is 1 anyway
+    if y == -1 { return Some(1) }
+    let r = x % y
+    x = y
+    y = r
+  }
+  Some(-x)
+}

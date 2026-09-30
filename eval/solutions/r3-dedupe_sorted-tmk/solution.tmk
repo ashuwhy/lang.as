@@ -1,0 +1,21 @@
+pub fn dedupe_sorted(a: [int]) -> [int]
+  ensures result.len <= a.len && (result.len == 0) == (a.len == 0)
+  ensures forall i in 0..result.len: forall j in i + 1..result.len: result[i] < result[j]
+  ensures forall j in 0..result.len: exists k in 0..a.len: result[j] == a[k]
+{
+  var out = [0; 0]
+  if a.len == 0 { return out }
+  var last = a[0]
+  out.push(last)
+  for i in 1..a.len
+    invariant out.len >= 1 && last == out[out.len - 1]
+    invariant forall p in 0..out.len: forall q in p + 1..out.len: out[p] < out[q]
+    invariant forall j in 0..out.len: exists k in 0..i: out[j] == a[k]
+  {
+    if a[i] > last {
+      last = a[i]
+      out.push(last)
+    }
+  }
+  out
+}

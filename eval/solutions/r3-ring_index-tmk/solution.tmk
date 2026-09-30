@@ -1,0 +1,11 @@
+// head + offset overflows when offset is near int.max, so reduce offset first:
+// offset % cap is in (-cap, cap), which keeps head + offset % cap within one lap of [0, cap).
+pub fn ring_index(head: int, offset: int, cap: int) -> int
+  requires 1 <= cap && cap <= 1_000_000_000
+  requires 0 <= head && head < cap
+  ensures 0 <= result && result < cap
+  ensures exists q in offset / cap - 1..offset / cap + 2: head + offset == cap * q + result
+{
+  let slot = head + offset % cap
+  if slot < 0 { slot + cap } else if slot >= cap { slot - cap } else { slot }
+}

@@ -99,3 +99,21 @@ reported separately and not counted.
   49,024, T_work 3,703, 2 tool calls, 11.5 s; Touchmark 25/25 tests, T_ctx 54,736, T_work
   9,382, 4 tool calls, 23.3 s. No agent read files outside its directory. Usage script SHA-256:
   `c9178953940760eda8b440af13e845defd3b654c5767ceb27fb5c2b11ad708d5`.
+- 2026-10-01, after 63 counted runs and before scoring the rest: the first session hit its usage
+  limit during trial 3, so the nine unscored trial-3 runs (`r3-ring_index-tmk`,
+  `r3-dedupe_sorted-tmk`, `r3-merge_sorted-tmk`, `r3-exact_sum-tmk`, `r3-exact_sum-rs`,
+  `r3-gcd-tmk`, `r3-gcd-rs`, `r3-isqrt-tmk`, `r3-isqrt-rs`) were re-run in a new session with
+  the same prompts (`harness.py` `prompt()`, unchanged SHA) in fresh `/work/<run-id>/`
+  directories, one fresh sub-agent each. The cut-off agents' IDs are kept in `runs.json` as
+  `superseded_agent`; nothing from them was scored. What differed from the first session:
+  the host was macOS arm64 instead of the Linux container, with rustc 1.93.1 (not 1.94.1) and
+  Z3 4.15.2; `/work` was a symlink into the home directory; `tmk` was rebuilt from the same
+  compiler source (`git diff 8716eff` empty) and `llms.txt` was byte-identical; `eval/` was
+  made unreadable (mode 000) while the agents ran, since they started in the repository root;
+  the nine were started at once rather than interleaved by task; the model was recorded
+  (`claude-opus-5-5`; the first session did not record it); and my global instructions for
+  the agent runner were in every sub-agent's context. Both arms cost more in the re-run
+  (RESULTS.md reports it separately). `usage.py` was extended to read macOS paths, record the
+  model and break tokens down by cause, with the token formulas unchanged (SHA-256 now
+  `08af0b14303ef19bdcd63a248fb499fad3e638f2374bd5b78931324bd99de3c4`); `score_all.py` reads
+  the new session's transcript directory; `report.py` was added to regenerate RESULTS.md.
