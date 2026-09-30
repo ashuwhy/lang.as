@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{BinOp, UnOp};
+use crate::ast::{BinOp, Quantifier, UnOp};
 use crate::diag::{Source, Span};
 use crate::tir::*;
 use crate::verify::{mangle, Site, SiteKind, Verdict};
@@ -33,7 +33,23 @@ static inline int64_t as_mul(int64_t a, int64_t b, const char *at) { int64_t r; 
 static inline int64_t as_neg(int64_t a, const char *at) { if (a == INT64_MIN) as_fail(at, "integer overflow"); return -a; }
 static inline int64_t as_div(int64_t a, int64_t b, const char *at) { if (b == 0) as_fail(at, "division by zero"); if (a == INT64_MIN && b == -1) as_fail(at, "integer overflow"); return a / b; }
 static inline int64_t as_rem(int64_t a, int64_t b, const char *at) { if (b == 0) as_fail(at, "division by zero"); if (a == INT64_MIN && b == -1) as_fail(at, "integer overflow"); return a % b; }
+#define AS_I128_MAX ((__int128)(~(unsigned __int128)0 >> 1))
+#define AS_I128_MIN (-AS_I128_MAX - 1)
+static inline __int128 as_add128(__int128 a, __int128 b, const char *at) { __int128 r; if (__builtin_add_overflow(a, b, &r)) as_fail(at, "integer overflow"); return r; }
+static inline __int128 as_sub128(__int128 a, __int128 b, const char *at) { __int128 r; if (__builtin_sub_overflow(a, b, &r)) as_fail(at, "integer overflow"); return r; }
+static inline __int128 as_mul128(__int128 a, __int128 b, const char *at) { __int128 r; if (__builtin_mul_overflow(a, b, &r)) as_fail(at, "integer overflow"); return r; }
+static inline __int128 as_neg128(__int128 a, const char *at) { if (a == AS_I128_MIN) as_fail(at, "integer overflow"); return -a; }
+static inline __int128 as_div128(__int128 a, __int128 b, const char *at) { if (b == 0) as_fail(at, "division by zero"); if (a == AS_I128_MIN && b == -1) as_fail(at, "integer overflow"); return a / b; }
+static inline __int128 as_rem128(__int128 a, __int128 b, const char *at) { if (b == 0) as_fail(at, "division by zero"); if (a == AS_I128_MIN && b == -1) as_fail(at, "integer overflow"); return a % b; }
+static inline int64_t as_narrow(__int128 a, const char *at) { if (a < INT64_MIN || a > INT64_MAX) as_fail(at, "value does not fit in int"); return (int64_t)a; }
 static void as_print_int(int64_t v) { printf("%lld", (long long)v); }
+static void as_print_i128(__int128 v) {
+  char d[40]; int n = 0;
+  unsigned __int128 u = v < 0 ? -(unsigned __int128)v : (unsigned __int128)v;
+  do { d[n++] = (char)('0' + (int)(u % 10)); u /= 10; } while (u);
+  if (v < 0) putchar('-');
+  while (n) putchar(d[--n]);
+}
 static void as_print_bool(bool v) { fputs(v ? "true" : "false", stdout); }
 "#;
 
@@ -122,12 +138,17 @@ impl<'a> Codegen<'a> {
     fn ty(&self, t: &Ty) -> String {
         match self.m.erase(t) {
             Ty::Int => "int64_t".into(),
+            Ty::I128 => "__int128".into(),
             Ty::Bool => "bool".into(),
             Ty::Unit | Ty::Never => "as_unit".into(),
             Ty::Str => "const char *".into(),
             t @ Ty::Array(_) => format!("{} *", mangle(self.m, &t)),
             t => mangle(self.m, &t),
         }
+    }
+
+    fn wide(&self, e: &TExpr) -> bool {
+        self.m.peel(&e.ty) == Ty::I128
     }
 
     fn arr_name(&self, t: &Ty) -> String {
@@ -227,7 +248,7 @@ impl<'a> Codegen<'a> {
 
     fn eq(&self, t: &Ty, a: &str, b: &str) -> String {
         match self.m.erase(t) {
-            Ty::Int | Ty::Bool | Ty::Unit | Ty::Never | Ty::Str => format!("{a} == {b}"),
+            Ty::Int | Ty::I128 | Ty::Bool | Ty::Unit | Ty::Never | Ty::Str => format!("{a} == {b}"),
             t => format!("as_eq_{}({a}, {b})", mangle(self.m, &t)),
         }
     }
@@ -328,15 +349,24 @@ impl<'a> Codegen<'a> {
 
     fn spec_inner(&mut self, e: &TExpr) -> String {
         match &e.kind {
-            TExprKind::Quant { forall, var, lo, hi, body } => {
+            TExprKind::Quant { q, var, lo, hi, body } => {
+                // "Sorted" written over all pairs is checked over adjacent pairs: one pass, not n^2/2.
+                let adjacent = match (&body.kind, chain(e)) {
+                    (TExprKind::Quant { .. }, Some(c)) => Some(c.adjacent(*var, e.span)),
+                    _ => None,
+                };
+                let (lo, hi, body) = match &adjacent {
+                    Some(TExpr { kind: TExprKind::Quant { lo, hi, body, .. }, .. }) => (lo, hi, body),
+                    _ => (lo, hi, body),
+                };
                 let (l, h) = (self.spec(lo), self.spec(hi));
                 let v = self.local(*var);
                 let b = self.spec(body);
                 let ok = self.fresh();
-                if *forall {
-                    format!("({{ bool {ok} = 1; for (__int128 _q = {l}; {ok} && _q < {h}; _q++) {{ int64_t {v} = (int64_t)_q; {ok} = ({b}); }} {ok}; }})")
-                } else {
-                    format!("({{ bool {ok} = 0; for (__int128 _q = {l}; !{ok} && _q < {h}; _q++) {{ int64_t {v} = (int64_t)_q; {ok} = ({b}); }} {ok}; }})")
+                match q {
+                    Quantifier::Forall => format!("({{ bool {ok} = 1; for (__int128 _q = {l}; {ok} && _q < {h}; _q++) {{ int64_t {v} = (int64_t)_q; {ok} = ({b}); }} {ok}; }})"),
+                    Quantifier::Exists => format!("({{ bool {ok} = 0; for (__int128 _q = {l}; !{ok} && _q < {h}; _q++) {{ int64_t {v} = (int64_t)_q; {ok} = ({b}); }} {ok}; }})"),
+                    Quantifier::Sum => format!("({{ __int128 {ok} = 0; for (__int128 _q = {l}; _q < {h}; _q++) {{ int64_t {v} = (int64_t)_q; {ok} += ({b}); }} {ok}; }})"),
                 }
             }
             TExprKind::Index(a, i) => format!("(({})->data[(int64_t)({})])", self.spec(a), self.spec(i)),
@@ -355,6 +385,7 @@ impl<'a> Codegen<'a> {
                 }
             }
             TExprKind::Unary(UnOp::Neg, x) => format!("(-(__int128)({}))", self.spec(x)),
+            TExprKind::Unary(UnOp::Cast, x) => format!("((__int128)({}))", self.spec(x)),
             TExprKind::Unary(UnOp::Not, x) => format!("(!({}))", self.spec(x)),
             TExprKind::Field(x, i) => {
                 let r = match self.m.peel(&x.ty) {
@@ -501,6 +532,7 @@ impl<'a> Codegen<'a> {
                     let x = self.expr(a);
                     s += &match self.m.peel(&a.ty) {
                         Ty::Int => format!("as_print_int({x}); "),
+                        Ty::I128 => format!("as_print_i128({x}); "),
                         Ty::Bool => format!("as_print_bool({x}); "),
                         _ => format!("fputs({x}, stdout); "),
                     };
@@ -535,7 +567,18 @@ impl<'a> Codegen<'a> {
             TExprKind::Unary(UnOp::Not, x) => format!("(!({}))", self.expr(x)),
             TExprKind::Unary(UnOp::Neg, x) => {
                 let xs = self.expr(x);
-                if self.proved(SiteKind::Overflow, e.span) { format!("(-({xs}))") } else { format!("as_neg({xs}, {})", self.at(e.span)) }
+                let f = if self.wide(e) { "as_neg128" } else { "as_neg" };
+                if self.proved(SiteKind::Overflow, e.span) { format!("(-({xs}))") } else { format!("{f}({xs}, {})", self.at(e.span)) }
+            }
+            TExprKind::Unary(UnOp::Cast, x) => {
+                let xs = self.expr(x);
+                if self.wide(e) {
+                    format!("((__int128)({xs}))")
+                } else if !self.wide(x) || self.proved(SiteKind::Overflow, e.span) {
+                    format!("((int64_t)({xs}))")
+                } else {
+                    format!("as_narrow({xs}, {})", self.at(e.span))
+                }
             }
             TExprKind::Binary(op, l, r) => {
                 let (a, b) = (self.expr(l), self.expr(r));
@@ -548,7 +591,8 @@ impl<'a> Codegen<'a> {
                             format!("(({a}) {} ({b}))", op.symbol())
                         } else {
                             let f = match op { BinOp::Add => "as_add", BinOp::Sub => "as_sub", _ => "as_mul" };
-                            format!("{f}({a}, {b}, {})", self.at(e.span))
+                            let w = if self.wide(e) { "128" } else { "" };
+                            format!("{f}{w}({a}, {b}, {})", self.at(e.span))
                         }
                     }
                     BinOp::Div | BinOp::Rem => {
@@ -562,7 +606,8 @@ impl<'a> Codegen<'a> {
                         } else if self.proved(SiteKind::DivZero, e.span) && self.proved(SiteKind::DivOverflow, e.span) {
                             format!("(({a}) {sym} ({b}))")
                         } else {
-                            format!("{}({a}, {b}, {})", if *op == BinOp::Div { "as_div" } else { "as_rem" }, self.at(e.span))
+                            let w = if self.wide(e) { "128" } else { "" };
+                            format!("{}{w}({a}, {b}, {})", if *op == BinOp::Div { "as_div" } else { "as_rem" }, self.at(e.span))
                         }
                     }
                     _ => format!("(({a}) {} ({b}))", op.symbol()),
@@ -808,7 +853,11 @@ impl<'a> Codegen<'a> {
 }
 
 fn int_lit(v: i128) -> String {
-    if v == i64::MIN as i128 {
+    if v < i64::MIN as i128 || v > i64::MAX as i128 {
+        // C has no 128-bit literals: build it from its two halves.
+        let u = v as u128;
+        format!("((__int128)(((unsigned __int128)UINT64_C({}) << 64) | UINT64_C({})))", (u >> 64) as u64, u as u64)
+    } else if v == i64::MIN as i128 {
         "INT64_MIN".into()
     } else if v < 0 {
         format!("(-INT64_C({}))", -v)
@@ -934,19 +983,6 @@ fn assigned_whole(e: &TExpr, id: LocalId) -> bool {
         }
         TExprKind::If(c, t, f) => assigned_whole(c, id) || assigned_whole(t, id) || assigned_whole(f, id),
         TExprKind::Match(s, arms) => assigned_whole(s, id) || arms.iter().any(|(_, b)| assigned_whole(b, id)),
-        _ => false,
-    }
-}
-
-fn mentions_any(e: &TExpr, ids: &[LocalId]) -> bool {
-    match &e.kind {
-        TExprKind::Local(id) => ids.contains(id),
-        TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Coerce(x, _) | TExprKind::Len(x) | TExprKind::Is(x, _) => mentions_any(x, ids),
-        TExprKind::Binary(_, a, b) | TExprKind::Index(a, b) | TExprKind::ArrayRepeat(a, b) => mentions_any(a, ids) || mentions_any(b, ids),
-        TExprKind::Quant { lo, hi, body, .. } => mentions_any(lo, ids) || mentions_any(hi, ids) || mentions_any(body, ids),
-        TExprKind::If(c, t, f) => mentions_any(c, ids) || mentions_any(t, ids) || mentions_any(f, ids),
-        TExprKind::Record(xs) | TExprKind::Ctor(_, xs) | TExprKind::Call(_, xs) | TExprKind::Print(xs) | TExprKind::ArrayLit(xs) => xs.iter().any(|x| mentions_any(x, ids)),
-        TExprKind::Block(_, t) => mentions_any(t, ids),
         _ => false,
     }
 }

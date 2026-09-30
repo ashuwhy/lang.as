@@ -10,12 +10,23 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use crate::ast::{BinOp, UnOp};
+use crate::ast::{BinOp, Quantifier, UnOp};
 use crate::diag::{Diagnostic, Source, Span};
 use crate::tir::*;
 
 const MIN: &str = "(- 9223372036854775808)";
 const MAX: &str = "9223372036854775807";
+const MIN128: &str = "(- 170141183460469231731687303715884105728)";
+const MAX128: &str = "170141183460469231731687303715884105727";
+/// Solver budget in the shared solver for a nonlinear check, which a fresh solver retries.
+const NONLINEAR_MS: u32 = 1000;
+/// `sum j in l..h: f(j)`, summed from the top so that extending a range upwards unfolds once.
+/// `sum` is uninterpreted in the shared solver, with its unfolding at both ends stated for each
+/// sum outside a quantifier: given the recursive definition, Z3 keeps unfolding and times out
+/// on queries that need no unfolding at all. A counterexample is only trusted once a fresh
+/// solver with the real definition, `TSUM_REC`, finds it too.
+const TSUM: &str = "(declare-fun tsum ((Array Int Int) Int Int) Int)";
+const TSUM_REC: &str = "(define-fun-rec tsum ((f (Array Int Int)) (l Int) (h Int)) Int (ite (<= h l) 0 (+ (tsum f l (- h 1)) (select f (- h 1)))))";
 /// Largest array length the compiler admits (2^40 elements).
 pub const MAX_LEN: &str = "1099511627776";
 
@@ -127,6 +138,7 @@ struct Fv<'a> {
     /// While inferring invariants, symbolic runs must not report obligations.
     sandbox: bool,
     infer: bool,
+    timeout_ms: u32,
     z3: String,
     preamble: String,
     consts: Vec<i128>,
@@ -157,11 +169,15 @@ struct Fv<'a> {
     probe: bool,
     /// Each probe: target, facts known at that point, path condition, goals.
     probes: Vec<(Probe, usize, String, Vec<String>)>,
+    /// How many quantifiers (or sums) enclose the contract term being encoded. Ground facts
+    /// about a term can only be stated outside all of them.
+    quant_depth: usize,
+    tsum: bool,
 }
 
 pub fn sort(m: &Module, t: &Ty) -> String {
     match m.erase(t) {
-        Ty::Int | Ty::Never | Ty::Unit => "Int".into(),
+        Ty::Int | Ty::I128 | Ty::Never | Ty::Unit => "Int".into(),
         Ty::Bool => "Bool".into(),
         Ty::Str => "String".into(),
         t => mangle(m, &t),
@@ -171,6 +187,7 @@ pub fn sort(m: &Module, t: &Ty) -> String {
 pub fn mangle(m: &Module, t: &Ty) -> String {
     match m.erase(t) {
         Ty::Int | Ty::Never | Ty::Unit => "Int".into(),
+        Ty::I128 => "I128".into(),
         Ty::Bool => "Bool".into(),
         Ty::Str => "Str".into(),
         Ty::Record(r) => format!("R_{}", m.records[r].name),
@@ -326,7 +343,7 @@ fn verify_funcs(m: &Module, src: &Source, opts: &Options, pre: &str, contracts: 
             let full = format!("{pre}(set-option :timeout {})\n{script}", opts.timeout_ms);
             let t0 = std::time::Instant::now();
             let answers = match run_z3(&opts.z3, &full) {
-                Some(a) => a,
+                Some(a) => fv.retry(a, pre, opts.timeout_ms),
                 None => {
                     rep.solver_missing = true;
                     vec![]
@@ -766,7 +783,7 @@ impl<'a> Fv<'a> {
             return "true".into();
         }
         match m.peel(t) {
-            Ty::Int => format!("(<= (- 1000) {v} 1000)"),
+            Ty::Int | Ty::I128 => format!("(<= (- 1000) {v} 1000)"),
             Ty::Array(_) => self.small_array(t, v),
             Ty::Record(r) => {
                 let (_, sels) = ctors(m, &Ty::Record(r)).remove(0);
@@ -803,6 +820,7 @@ impl<'a> Fv<'a> {
             params_show: vec![],
             sandbox: false,
             infer: opts.infer,
+            timeout_ms: opts.timeout_ms,
             z3: opts.z3.clone(),
             preamble: pre.to_string(),
             consts: crate::infer::constants(m, f),
@@ -823,6 +841,8 @@ impl<'a> Fv<'a> {
             contract_sites: HashMap::new(),
             probe: false,
             probes: vec![],
+            quant_depth: 0,
+            tsum: false,
         }
     }
 
@@ -900,7 +920,7 @@ impl<'a> Fv<'a> {
                 return;
             }
             match m.peel(t) {
-                Ty::Int => out.push(format!("(<= (- 1000) {v} 1000)")),
+                Ty::Int | Ty::I128 => out.push(format!("(<= (- 1000) {v} 1000)")),
                 Ty::Record(r) => {
                     let (_, sels) = ctors(m, &Ty::Record(r)).remove(0);
                     for ((_, ft), sel) in m.records[r].fields.iter().zip(sels) {
@@ -929,6 +949,7 @@ impl<'a> Fv<'a> {
         let m = self.m;
         let parts: Vec<String> = match t {
             Ty::Int => vec![format!("(<= {MIN} {v})"), format!("(<= {v} {MAX})")],
+            Ty::I128 => vec![format!("(<= {MIN128} {v})"), format!("(<= {v} {MAX128})")],
             Ty::Alias(a) => {
                 let def = &m.aliases[*a];
                 let mut p = vec![self.wf(&def.base.clone(), v)];
@@ -947,7 +968,7 @@ impl<'a> Fv<'a> {
                 let mut p = vec![format!("(<= 0 {len})"), format!("(<= {len} {MAX_LEN})")];
                 // Plain integers are not constrained element by element; that only makes proofs
                 // harder, never unsound, and keeps quantifiers out of most queries.
-                if **elem != Ty::Int {
+                if !matches!(**elem, Ty::Int | Ty::I128) {
                     let k = format!("qk_{}", self.fresh);
                     self.fresh += 1;
                     let ew = self.wf(&elem.clone(), &format!("(select ({} {v}) {k})", sels[0]));
@@ -1036,13 +1057,22 @@ impl<'a> Fv<'a> {
         for e in &self.events {
             match e {
                 Event::Fact(f) => out += &format!("(assert {f})\n"),
-                Event::Check { pc, goal, show, .. } => {
+                Event::Check { site, pc, goal, show, .. } => {
+                    // A nonlinear goal the shared solver cannot settle quickly goes to a fresh
+                    // solver instead (`retry`); waiting the full budget here rarely helps.
+                    let quick = !site.kind.is_hint() && nonlinear(goal);
+                    if quick {
+                        out += &format!("(set-option :timeout {})\n", NONLINEAR_MS.min(self.timeout_ms));
+                    }
                     out += &format!("(push 1)\n(assert {pc})\n(assert (not {goal}))\n(check-sat)\n");
                     let vars: Vec<&str> = show.iter().map(|(_, v)| v.as_str()).collect();
                     let get = if vars.is_empty() { "(get-value (0))\n".to_string() } else { format!("(get-value ({}))\n", vars.join(" ")) };
                     out += &get;
                     out += &format!("(assert {})\n(check-sat)\n{get}", self.small());
                     out += "(pop 1)\n";
+                    if quick {
+                        out += &format!("(set-option :timeout {})\n", self.timeout_ms);
+                    }
                 }
             }
         }
@@ -1078,16 +1108,20 @@ impl<'a> Fv<'a> {
         }
     }
 
-    fn ranged(&mut self, st: &St, t: &str, span: Span, op: &str) {
-        let goal = format!("(and (<= {MIN} {t}) (<= {t} {MAX}))");
+    fn ranged(&mut self, st: &St, t: &str, span: Span, op: &str, ty: &Ty) {
         let text = self.text(span);
-        self.check(st, Site { kind: SiteKind::Overflow, span }, goal, format!("`{text}` can overflow a 64-bit int"), Some(format!("bound the operands with a `requires`, e.g. `requires {text} <= int.max`, or check them before the `{op}`")), vec![]);
+        let (goal, what, max) = if self.m.peel(ty) == Ty::I128 {
+            (format!("(and (<= {MIN128} {t}) (<= {t} {MAX128}))"), format!("`{text}` can overflow a 128-bit i128"), "i128.max")
+        } else {
+            (format!("(and (<= {MIN} {t}) (<= {t} {MAX}))"), format!("`{text}` can overflow a 64-bit int"), "int.max")
+        };
+        self.check(st, Site { kind: SiteKind::Overflow, span }, goal, what, Some(format!("bound the operands with a `requires`, e.g. `requires {text} <= {max}`, or check them before the `{op}`")), vec![]);
     }
 
     fn expr(&mut self, e: &TExpr, st: St) -> (Option<St>, String) {
         let m = self.m;
         match &e.kind {
-            TExprKind::Int(v) => (Some(st), if *v < 0 { format!("(- {})", -v) } else { v.to_string() }),
+            TExprKind::Int(v) => (Some(st), if *v < 0 { format!("(- {})", v.unsigned_abs()) } else { v.to_string() }),
             TExprKind::Bool(b) => (Some(st), b.to_string()),
             TExprKind::Str(_) | TExprKind::Unit => (Some(st), "0".into()),
             TExprKind::Local(id) => {
@@ -1189,9 +1223,16 @@ impl<'a> Fv<'a> {
                     UnOp::Neg => {
                         let t = format!("(- {xv})");
                         if !self.spec {
-                            self.ranged(&st, &t, e.span, "-");
+                            self.ranged(&st, &t, e.span, "-", &e.ty);
                         }
                         (Some(st), t)
+                    }
+                    UnOp::Cast => {
+                        if !self.spec && self.m.peel(&e.ty) == Ty::Int {
+                            let text = self.text(x.span);
+                            self.check(&st, Site { kind: SiteKind::Overflow, span: e.span }, format!("(and (<= {MIN} {xv}) (<= {xv} {MAX}))"), format!("`{text}` may not fit in a 64-bit int"), Some(format!("make sure `int.min <= {text} && {text} <= int.max` holds here, e.g. with a `requires`")), vec![("value".into(), xv.clone())]);
+                        }
+                        (Some(st), xv)
                     }
                 }
             }
@@ -1229,13 +1270,16 @@ impl<'a> Fv<'a> {
                 };
                 if !self.spec {
                     match op {
-                        BinOp::Add | BinOp::Sub | BinOp::Mul => self.ranged(&st, &t, e.span, op.symbol()),
+                        BinOp::Add | BinOp::Sub | BinOp::Mul => self.ranged(&st, &t, e.span, op.symbol(), &e.ty),
                         BinOp::Div | BinOp::Rem => {
                             let rt = self.text(r.span);
+                            let (min, name) = if self.m.peel(&e.ty) == Ty::I128 { (MIN128, "i128.min") } else { (MIN, "int.min") };
                             self.check(&st, Site { kind: SiteKind::DivZero, span: e.span }, format!("(not (= {rv} 0))"), format!("`{rt}` can be zero here"), Some(format!("add `requires {rt} != 0`, or handle zero before dividing")), vec![]);
-                            self.check(&st, Site { kind: SiteKind::DivOverflow, span: e.span }, format!("(not (and (= {lv} {MIN}) (= {rv} (- 1))))"), format!("`{}` overflows when dividing int.min by -1", self.text(e.span)), Some("exclude `int.min` with a `requires`".into()), vec![]);
-                            self.check(&st, Site { kind: SiteKind::FastDiv32, span: e.span }, format!("(and (<= 0 {lv} 2147483647) (< 0 {rv} 2147483648))"), String::new(), None, vec![]);
-                            self.check(&st, Site { kind: SiteKind::FastDivUnsigned, span: e.span }, format!("(and (<= 0 {lv}) (< 0 {rv}))"), String::new(), None, vec![]);
+                            self.check(&st, Site { kind: SiteKind::DivOverflow, span: e.span }, format!("(not (and (= {lv} {min}) (= {rv} (- 1))))"), format!("`{}` overflows when dividing {name} by -1", self.text(e.span)), Some(format!("exclude `{name}` with a `requires`")), vec![]);
+                            if name == "int.min" {
+                                self.check(&st, Site { kind: SiteKind::FastDiv32, span: e.span }, format!("(and (<= 0 {lv} 2147483647) (< 0 {rv} 2147483648))"), String::new(), None, vec![]);
+                                self.check(&st, Site { kind: SiteKind::FastDivUnsigned, span: e.span }, format!("(and (<= 0 {lv}) (< 0 {rv}))"), String::new(), None, vec![]);
+                            }
                         }
                         _ => {}
                     }
@@ -1336,16 +1380,30 @@ impl<'a> Fv<'a> {
                 let (c, _) = ctors(m, &e.ty).remove(0);
                 (Some(st), format!("({c} ((as const (Array Int {})) {vv}) {nv})", sort(m, &elem)))
             }
-            TExprKind::Quant { forall, var, lo, hi, body } => {
+            TExprKind::Quant { q: Quantifier::Forall, .. } if chain(e).is_some() => {
+                let c = chain(e).unwrap();
+                let t = self.sorted(&c, &st);
+                (Some(st), t)
+            }
+            TExprKind::Quant { q, var, lo, hi, body } => {
                 let (_, lv) = self.expr(lo, st.clone());
                 let (_, hv) = self.expr(hi, st.clone());
                 let k = format!("q_{}", self.fresh);
                 self.fresh += 1;
                 let mut inner = st.clone();
                 inner.env.insert(*var, k.clone());
+                self.quant_depth += 1;
                 let (_, bv) = self.expr(body, inner);
+                self.quant_depth -= 1;
                 let range = format!("(and (<= {lv} {k}) (< {k} {hv}))");
-                let t = if *forall { format!("(forall (({k} Int)) (=> {range} {bv}))") } else { format!("(exists (({k} Int)) (and {range} {bv}))") };
+                let t = match q {
+                    Quantifier::Forall => format!("(forall (({k} Int)) (=> {range} {bv}))"),
+                    Quantifier::Exists => format!("(exists (({k} Int)) (and {range} {bv}))"),
+                    Quantifier::Sum => {
+                        let t = self.sum(body, *var, &k, &bv, &lv, &hv, &st);
+                        return (Some(st), t);
+                    }
+                };
                 (Some(st), t)
             }
             TExprKind::Block(stmts, tail) => {
@@ -1727,6 +1785,111 @@ impl<'a> Fv<'a> {
         v
     }
 
+    /// `sum j in l..h: body` as `(tsum f l h)`. Outside every quantifier the term also gets its
+    /// value on an empty range, its unfolding at the top and at the bottom (a sliding window
+    /// needs both ends) and, over an `int` array, the range its elements allow.
+    #[allow(clippy::too_many_arguments)]
+    fn sum(&mut self, body: &TExpr, var: LocalId, k: &str, bv: &str, lv: &str, hv: &str, st: &St) -> String {
+        if !self.tsum {
+            self.decls.push(TSUM.into());
+            self.tsum = true;
+        }
+        let (f, len) = match &body.kind {
+            TExprKind::Index(arr, i) if matches!(i.kind, TExprKind::Local(v) if v == var) && !mentions_any(arr, &[var]) => {
+                let av = self.spec_expr(arr, st);
+                let (_, sels) = ctors(self.m, &arr.ty).remove(0);
+                let ints = matches!(self.m.erase(&arr.ty), Ty::Array(e) if *e == Ty::Int);
+                (format!("({} {av})", sels[0]), ints.then(|| format!("({} {av})", sels[1])))
+            }
+            _ => (format!("(lambda (({k} Int)) {bv})"), None),
+        };
+        let s = format!("(tsum {f} {lv} {hv})");
+        if self.quant_depth == 0 {
+            let top = St { pc: "true".into(), env: HashMap::new() };
+            self.fact(&top, format!("(=> (<= {hv} {lv}) (= {s} 0))"));
+            self.fact(&top, format!("(=> (< {lv} {hv}) (= {s} (+ (tsum {f} {lv} (- {hv} 1)) (select {f} (- {hv} 1)))))"));
+            self.fact(&top, format!("(=> (< {lv} {hv}) (= {s} (+ (select {f} {lv}) (tsum {f} (+ {lv} 1) {hv}))))"));
+            if let Some(len) = len {
+                self.fact(&top, format!("(=> (and (<= 0 {lv}) (<= {lv} {hv}) (<= {hv} {len})) (and (<= (* (- {hv} {lv}) {MIN}) {s}) (<= {s} (* (- {hv} {lv}) {MAX}))))"));
+            }
+        }
+        s
+    }
+
+    /// Every way of writing "sorted" (adjacent pairs, all pairs) becomes one formula over all
+    /// pairs, so a fact in one shape proves a goal in another. From adjacent pairs to all pairs
+    /// takes induction, which the solver does not do; the two mean the same for an ordering.
+    fn sorted(&mut self, c: &Chain, st: &St) -> String {
+        let av = self.spec_expr(c.arr, st);
+        let (lo, hi) = (self.spec_expr(&c.lo, st), self.spec_expr(&c.hi, st));
+        let (_, sels) = ctors(self.m, &c.arr.ty).remove(0);
+        let d = format!("({} {av})", sels[0]);
+        let op = match c.op {
+            BinOp::Lt => "<",
+            BinOp::Le => "<=",
+            BinOp::Gt => ">",
+            _ => ">=",
+        };
+        // Strict `si < sj` even for `<=`: Z3 proves with it several times faster (0.3 s against
+        // 1.9 s on a round 1 solution). It is slower to find models with, but that only costs
+        // time on probes of invariant candidates that fail anyway.
+        format!("(forall ((si Int) (sj Int)) (=> (and (<= {lo} si) (< si sj) (< sj {hi})) ({op} (select {d} si) (select {d} sj))))")
+    }
+
+    /// Checks to ask again in a fresh solver, with only the facts before them, up to six per
+    /// function side by side. Division, remainder or a product of variables the shared
+    /// incremental solver gave up on: a fresh query is often proved in well under a second,
+    /// because Z3 picks its nonlinear strategy only for a fresh query. And a counterexample
+    /// that involves `sum`, which is only real if the recursive definition allows it.
+    fn retry(&self, mut answers: Vec<SExp>, pre: &str, timeout_ms: u32) -> Vec<SExp> {
+        let mut facts = String::new();
+        let mut jobs = vec![];
+        let mut n = 0;
+        for e in &self.events {
+            match e {
+                Event::Fact(f) => facts += &format!("(assert {f})\n"),
+                Event::Check { site, pc, goal, show, .. } => {
+                    let at = 4 * n;
+                    n += 1;
+                    let first = match answers.get(at) {
+                        Some(SExp::Atom(s)) => s.as_str(),
+                        _ => "unknown",
+                    };
+                    let open = first != "sat" && first != "unsat" && nonlinear(goal);
+                    let summed = first == "sat" && self.tsum;
+                    if (open || summed) && !site.kind.is_hint() && jobs.len() < 6 {
+                        let vars: Vec<&str> = show.iter().map(|(_, v)| v.as_str()).collect();
+                        let get = if vars.is_empty() { "(get-value (0))\n".to_string() } else { format!("(get-value ({}))\n", vars.join(" ")) };
+                        let decls = self.decls.join("\n").replace(TSUM, TSUM_REC);
+                        jobs.push((at, summed, format!("{pre}(set-option :timeout {timeout_ms})\n{decls}\n{facts}(assert {pc})\n(assert (not {goal}))\n(check-sat)\n{get}")));
+                    } else if summed {
+                        answers[at] = SExp::Atom("unknown".into());
+                    }
+                }
+            }
+        }
+        if jobs.is_empty() {
+            return answers;
+        }
+        answers.resize(4 * n, SExp::Atom("unknown".into()));
+        let z3 = &self.z3;
+        let fresh: Vec<Option<Vec<SExp>>> = std::thread::scope(|sc| {
+            let hs: Vec<_> = jobs.iter().map(|(_, _, s)| sc.spawn(move || run_z3(z3, s))).collect();
+            hs.into_iter().map(|h| h.join().ok().flatten()).collect()
+        });
+        for ((at, summed, _), ans) in jobs.iter().zip(fresh) {
+            match ans {
+                Some(mut ans) if matches!(ans.first(), Some(SExp::Atom(s)) if s == "sat" || s == "unsat") => {
+                    ans.resize(4, SExp::Atom("unknown".into()));
+                    answers.splice(*at..at + 4, ans);
+                }
+                _ if *summed => answers[*at] = SExp::Atom("unknown".into()),
+                _ => {}
+            }
+        }
+        answers
+    }
+
     fn collect(&self, answers: Vec<SExp>, rep: &mut Report) {
         let mut it = answers.into_iter();
         for e in &self.events {
@@ -1846,6 +2009,25 @@ fn merge(base: &St, cond: &str, a: Option<St>, av: String, b: Option<St>, bv: St
             (Some(St { pc, env }), v)
         }
     }
+}
+
+/// Division, remainder, or a product of two terms that are not numbers.
+fn nonlinear(goal: &str) -> bool {
+    fn number(x: &SExp) -> bool {
+        match x {
+            SExp::Atom(a) => a.chars().all(|c| c.is_ascii_digit()),
+            SExp::List(ys) => matches!(ys.as_slice(), [SExp::Atom(m), y] if m == "-" && number(y)),
+        }
+    }
+    fn go(e: &SExp) -> bool {
+        let SExp::List(xs) = e else { return false };
+        match xs.first() {
+            Some(SExp::Atom(op)) if op == "tdiv" || op == "trem" => true,
+            Some(SExp::Atom(op)) if op == "*" && xs[1..].iter().filter(|x| !number(x)).count() > 1 => true,
+            _ => xs.iter().any(go),
+        }
+    }
+    parse_sexps(goal).iter().any(go)
 }
 
 fn replace_word(s: &str, word: &str, with: &str) -> String {
@@ -2111,6 +2293,11 @@ pub fn check_refinement(m: &Module, src: &Source, f: &Func, old_req: &[TExpr], o
     let pvals = if params.is_empty() { "0".to_string() } else { params.join(" ") };
     let mut script = format!("{}(set-option :timeout {})\n", preamble(m), opts.timeout_ms);
     script += &fv.decls.join("\n");
+    for e in &fv.events {
+        if let Event::Fact(x) = e {
+            script += &format!("\n(assert {x})");
+        }
+    }
     let small = format!("(and {} {})", fv.small(), fv.small_value(&f.ret.clone(), &r));
     script += &format!("\n(assert {wf})\n(push 1)\n(assert {oreq})\n(assert (not {nreq}))\n(check-sat)\n(get-value ({pvals}))\n(assert {small})\n(check-sat)\n(get-value ({pvals}))\n(pop 1)\n");
     script += &format!("(push 1)\n(assert {oreq})\n(assert {nens})\n(assert (not {oens}))\n(check-sat)\n(get-value ({pvals} {r}))\n(assert {small})\n(check-sat)\n(get-value ({pvals} {r}))\n(pop 1)\n");

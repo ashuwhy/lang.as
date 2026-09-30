@@ -147,7 +147,9 @@ fn arrays_are_memory_safe_under_asan() {
         eprintln!("skipping: gcc with AddressSanitizer is not available");
         return;
     }
-    let out = Command::new(dir.join("a")).env("ASAN_OPTIONS", "detect_leaks=1").output().unwrap();
+    // LeakSanitizer exists only on Linux; asking for it elsewhere (macOS) aborts the run.
+    let leaks = if cfg!(target_os = "linux") { "detect_leaks=1" } else { "detect_leaks=0" };
+    let out = Command::new(dir.join("a")).env("ASAN_OPTIONS", leaks).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("primes below 1000 = 168"));
 }
@@ -261,4 +263,159 @@ fn fixes_found_while_preparing_the_agent_evaluation() {
     let (code, _, err) = tmk(&["check", "many.tmk"], &scratch("many", &many));
     assert_eq!(code, 0, "{err}");
     assert!(t0.elapsed().as_secs() < 60, "took {:?}", t0.elapsed());
+}
+
+const LOWER_BOUND: &str = "pub fn lower_bound(a: [int], key: int) -> int
+  requires forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j]
+  ensures 0 <= result && result <= a.len
+  ensures forall i in 0..result: a[i] < key
+  ensures forall i in result..a.len: a[i] >= key
+{
+  var lo = 0
+  var hi = a.len
+  while lo < hi
+    invariant 0 <= lo && lo <= hi && hi <= a.len
+    invariant forall i in 0..lo: a[i] < key
+    invariant forall i in hi..a.len: a[i] >= key
+  {
+    let mid = lo + (hi - lo) / 2
+    if a[mid] < key { lo = mid + 1 } else { hi = mid }
+  }
+  lo
+}
+";
+
+#[test]
+fn sortedness_is_cheap_to_state_and_to_establish() {
+    // Round 1: agents dropped `requires sorted` because a caller that builds its array with
+    // `push` could not prove it, and the run-time check compared every pair.
+    let built = format!("{LOWER_BOUND}\nfn main() uses io {{\n  var a = [0; 0]\n  for i in 0..1_000 {{\n    a.push(i * 3)\n  }}\n  io.print(lower_bound(a, 10))\n}}\n");
+    let (code, out, err) = tmk(&["run", "built.tmk"], &scratch("built", &built));
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "4");
+    assert!(err.contains("0 kept at run time"), "{err}");
+
+    // A strictly increasing result, built by a loop that skips repeats.
+    let dedupe = "pub fn dedupe(a: [int]) -> [int]\n  requires forall i in 1..a.len: a[i - 1] <= a[i]\n  ensures forall i in 1..result.len: result[i - 1] < result[i]\n{\n  var out = [0; 0]\n  for i in 0..a.len {\n    if out.len == 0 || out[out.len - 1] < a[i] { out.push(a[i]) }\n  }\n  out\n}\n";
+    let (code, _, err) = tmk(&["check", "dedupe.tmk"], &scratch("dedupe", dedupe));
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("0 kept at run time"), "{err}");
+
+    // The adjacent-pairs form is enough for a binary search: the compiler knows it implies
+    // every pair.
+    let adjacent = LOWER_BOUND.replace("forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j]", "forall i in 1..a.len: a[i - 1] <= a[i]");
+    let (code, _, err) = tmk(&["check", "adjacent.tmk"], &scratch("adjacent", &adjacent));
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("0 kept at run time"), "{err}");
+
+    // A check that stays at run time (here every check, with the prover off) takes one pass
+    // over adjacent pairs even when written over all pairs: a million elements, not 5 * 10^11
+    // comparisons.
+    let big = format!("{LOWER_BOUND}\nfn main() uses io {{\n  var a = [0; 0]\n  for i in 0..1_000_000 {{\n    a.push(i)\n  }}\n  io.print(lower_bound(a, 10))\n}}\n");
+    let t0 = std::time::Instant::now();
+    let (code, out, err) = tmk(&["run", "--no-verify", "big.tmk"], &scratch("big", &big));
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "10");
+    assert!(t0.elapsed().as_secs() < 60, "the sortedness check is not linear: {:?}", t0.elapsed());
+    let unsorted = big.replace("a.push(i)", "a.push(1_000_000 - i)");
+    let (code, _, err) = tmk(&["run", "--no-verify", "unsorted.tmk"], &scratch("unsorted", &unsorted));
+    assert_eq!(code, 101, "{err}");
+    assert!(err.contains("run-time check failed: requires"), "{err}");
+    // Values the caller knows nothing about: a real counterexample, so an error at the call.
+    let opaque = big.replace("a.push(i)", "a.push(noise(i))") + "\npub fn noise(x: int) -> int {\n  x\n}\n";
+    expect_error("opaque", &opaque, "E0203");
+}
+
+#[test]
+fn sums_in_contracts() {
+    let window = "pub fn last_window(a: [int], k: int) -> i128
+  requires 1 <= k && k <= a.len
+  ensures result == sum j in a.len - k..a.len: a[j]
+{
+  var s: i128 = 0
+  for i in 0..k
+    invariant s == sum j in 0..i: a[j]
+  {
+    s += i128(a[i])
+  }
+  for i in k..a.len
+    invariant s == sum j in i - k..i: a[j]
+  {
+    s = s + i128(a[i]) - i128(a[i - k])
+  }
+  s
+}
+
+fn main() uses io {
+  io.print(last_window([1, -2, 3, 4], 2))
+}
+";
+    let dir = scratch("window", window);
+    let (code, out, err) = tmk(&["run", "window.tmk"], &dir);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "7");
+    assert!(err.contains("0 kept at run time"), "{err}");
+    expect_error("window_off_by_one", &window.replace("invariant s == sum j in i - k..i: a[j]", "invariant s == sum j in i - k..i + 1: a[j]"), "E0206");
+    expect_error("window_wrong_result", &window.replace("ensures result == sum j in a.len - k..a.len: a[j]", "ensures result == sum j in a.len - k - 1..a.len: a[j]"), "E0204");
+    // `sum` is still an ordinary name outside that form.
+    let (code, out, err) = tmk(&["run", "arrays.tmk"], &root().join("examples"));
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("sum ="), "{out}");
+}
+
+#[test]
+fn wide_integers() {
+    // The exact sum of any `int` array fits in 128 bits: no carry tricks, no run-time checks.
+    let total = "pub fn total(a: [int]) -> i128\n  ensures result == sum j in 0..a.len: a[j]\n{\n  var s: i128 = 0\n  for i in 0..a.len\n    invariant s == sum j in 0..i: a[j]\n  {\n    s += i128(a[i])\n  }\n  s\n}\n\nfn main() uses io {\n  io.print(total([int.max, int.max, int.max]))\n  io.print(i128.max, i128.min)\n}\n";
+    let dir = scratch("total", total);
+    let (code, out, err) = tmk(&["run", "total.tmk"], &dir);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("0 kept at run time"), "{err}");
+    assert_eq!(out, "27670116110564327421\n170141183460469231731687303715884105727 -170141183460469231731687303715884105728\n");
+    // Narrowing back to `int` is checked like any other overflow.
+    expect_error("narrow", "pub fn back(x: i128) -> int {\n  int(x)\n}\n", "E0201");
+    let fits = "pub fn back(x: i128) -> int\n  requires int.min <= x && x <= int.max\n{\n  int(x)\n}\n";
+    let (code, _, err) = tmk(&["check", "fits.tmk"], &scratch("fits", fits));
+    assert_eq!(code, 0, "{err}");
+    // No silent mixing in code.
+    expect_error("mixed", "pub fn f(a: int, b: i128) -> i128 {\n  a + b\n}\n", "E0102");
+    expect_error("wide_overflow", "pub fn f(a: i128) -> i128 {\n  a * a\n}\n", "E0201");
+}
+
+#[test]
+fn modulo_by_a_variable() {
+    // Round 1: `ring_index` agents could not prove this and rewrote it as explicit cases.
+    let ring = "pub fn ring_index(head: int, offset: int, cap: int) -> int
+  requires 1 <= cap && cap <= 1_000_000_000
+  requires 0 <= head && head < cap
+  ensures 0 <= result && result < cap
+  ensures (head + offset - result) % cap == 0
+{
+  let s = head + offset % cap
+  if s < 0 { s + cap } else if s >= cap { s - cap } else { s }
+}
+
+fn main() uses io {
+  io.print(ring_index(2, 3, 4), ring_index(0, -1, 4), ring_index(5, int.min, 7))
+}
+";
+    let dir = scratch("ring", ring);
+    let (code, out, err) = tmk(&["run", "ring.tmk"], &dir);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "1 3 4");
+    assert!(err.contains("0 kept at run time"), "{err}");
+    expect_error("ring_wrong", &ring.replace("s + cap }", "s + cap - 1 }"), "E0204");
+
+    // The form the first agent wrote, before giving up on it.
+    let natural = ring.replace(
+        "  ensures 0 <= result && result < cap\n  ensures (head + offset - result) % cap == 0\n",
+        "  ensures result == ((head + offset) % cap + cap) % cap\n",
+    );
+    assert_ne!(natural, ring);
+    let dir = scratch("ring_natural", &natural);
+    let (code, out, err) = tmk(&["run", "ring_natural.tmk"], &dir);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "1 3 4");
+    assert!(err.contains("0 kept at run time"), "{err}");
+    expect_error("ring_natural_wrong", &natural.replace("s + cap }", "s + cap - 1 }"), "E0204");
 }

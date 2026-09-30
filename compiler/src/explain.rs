@@ -23,7 +23,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { code: "E0112", title: "record type needs a name", text: "Record types are declared once with `type Name = { ... }` and then used by name." },
     Entry { code: "E0113", title: "invalid main", text: "`main` takes no parameters and returns nothing. It may declare effects, e.g. `fn main() uses io`." },
     Entry { code: "E0114", title: "ignored Result", text: "A `Result` carries an error that must be handled. Use `match`, or bind it with `let _ = ...` if ignoring it is really intended." },
-    Entry { code: "E0115", title: "number out of range", text: "`int` is a 64-bit signed integer: from int.min (-9223372036854775808) to int.max (9223372036854775807)." },
+    Entry { code: "E0115", title: "number out of range", text: "`int` is a 64-bit signed integer: from int.min (-9223372036854775808) to int.max (9223372036854775807). Wider values need `i128`." },
     Entry { code: "E0116", title: "cannot compare these values in code", text: "In v0.1, `==` and `!=` in code work on numbers and booleans. Compare fields, or use `match` or `is`. Contracts may compare whole values." },
     Entry { code: "E0117", title: "argument label does not match", text: "Arguments may be labelled with parameter names, `transfer(from: a, to: b, amount: 30)`. Labels are checked, so swapped arguments are an error instead of a silent bug. When only the order is wrong, the fix line shows the corrected call." },
     Entry { code: "E0118", title: "array stored inside another value", text: "In v0.2 arrays can be variables, parameters and return values, but not fields of records, payloads of enums, options, or elements of other arrays. Nesting arrives with the heap-value work in v0.3." },

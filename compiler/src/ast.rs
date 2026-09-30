@@ -136,6 +136,15 @@ impl BinOp {
 pub enum UnOp {
     Neg,
     Not,
+    /// `i128(x)` or `int(x)`: the target is the expression's type.
+    Cast,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Quantifier {
+    Forall,
+    Exists,
+    Sum,
 }
 
 #[derive(Clone, Debug)]
@@ -163,8 +172,8 @@ pub enum ExprKind {
     ArrayLit(Vec<Expr>),
     /// `[value; count]`
     ArrayRepeat(Box<Expr>, Box<Expr>),
-    /// `forall i in lo..hi: body` (or `exists`), only in contracts.
-    Quant { forall: bool, var: String, lo: Box<Expr>, hi: Box<Expr>, body: Box<Expr> },
+    /// `forall i in lo..hi: body` (or `exists`, or `sum`), only in contracts.
+    Quant { q: Quantifier, var: String, lo: Box<Expr>, hi: Box<Expr>, body: Box<Expr> },
     /// `name: value` inside a call's argument list.
     Named(String, Box<Expr>),
 }

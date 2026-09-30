@@ -42,6 +42,27 @@ fn texpr(kind: TExprKind, ty: Ty, span: Span) -> TExpr {
     TExpr { kind, ty, span }
 }
 
+/// The value of a number written in the source (or `int.min`, `-5`). It takes whichever integer
+/// type its context wants, as long as it fits.
+fn literal(e: &TExpr) -> Option<i128> {
+    match &e.kind {
+        TExprKind::Int(v) => Some(*v),
+        TExprKind::Unary(UnOp::Neg, x) => literal(x)?.checked_neg(),
+        _ => None,
+    }
+}
+
+fn fits(v: i128, ty: &Ty) -> bool {
+    *ty == Ty::I128 || i64::MIN as i128 <= v && v <= i64::MAX as i128
+}
+
+fn retype(v: i128, ty: &Ty, span: Span) -> CResult<TExpr> {
+    if !fits(v, ty) {
+        return Err(Diagnostic::error("E0115", span, "this number does not fit in `int` (64-bit)").with_fix("make it an `i128`, e.g. `let x: i128 = ...`"));
+    }
+    Ok(texpr(TExprKind::Int(v), ty.clone(), span))
+}
+
 pub fn check_program(prog: &Program, src: &Source) -> (Module, Vec<Diagnostic>) {
     let (m, d, _) = check_program_with(prog, src, &[]);
     (m, d)
@@ -85,7 +106,7 @@ impl<'a> Checker<'a> {
             Span::default(),
         );
         self.m.aliases.push(AliasDef { name: "nat".into(), base: Ty::Int, pred: Some(pred), it, pred_src: Some("it >= 0".into()) });
-        for (n, t) in [("int", Ty::Int), ("bool", Ty::Bool), ("str", Ty::Str), ("nat", Ty::Alias(NAT))] {
+        for (n, t) in [("int", Ty::Int), ("i128", Ty::I128), ("bool", Ty::Bool), ("str", Ty::Str), ("nat", Ty::Alias(NAT))] {
             self.type_names.insert(n.into(), t);
         }
         for (i, n) in ["None", "Some"].iter().enumerate() {
@@ -490,6 +511,18 @@ impl<'a> Checker<'a> {
         if self.subtype(&e.ty, expected) {
             return Ok(e);
         }
+        let (have, want) = (self.m.peel(&e.ty), self.m.peel(expected));
+        if matches!((&have, &want), (Ty::Int, Ty::I128) | (Ty::I128, Ty::Int)) {
+            if self.mode != Mode::Code {
+                return Ok(e);
+            }
+            if let Some(v) = literal(&e) {
+                return self.coerce(retype(v, &want, e.span)?, expected);
+            }
+            let conv = if want == Ty::I128 { "i128" } else { "int" };
+            return Err(Diagnostic::error("E0102", e.span, format!("expected `{}`, found `{}`", self.m.show(expected), self.m.show(&e.ty)))
+                .with_fix(format!("convert it with `{conv}(...)`{}", if conv == "int" { "; the compiler proves the value fits" } else { "" })));
+        }
         if let Ty::Alias(a) = expected {
             if !self.has_pred(*a) && self.subtype(&e.ty, &self.m.erase(expected)) {
                 return Ok(e);
@@ -721,7 +754,7 @@ impl<'a> Checker<'a> {
     }
 
     fn expect_int(&self, e: &TExpr) -> CResult<()> {
-        if self.m.peel(&e.ty) == Ty::Int || e.ty == Ty::Never {
+        if matches!(self.m.peel(&e.ty), Ty::Int | Ty::I128) || e.ty == Ty::Never {
             Ok(())
         } else {
             Err(Diagnostic::error("E0102", e.span, format!("expected a number, found `{}`", self.m.show(&e.ty))))
@@ -733,10 +766,8 @@ impl<'a> Checker<'a> {
         let hint = expected.map(|t| self.m.peel(t));
         Ok(match &e.kind {
             ExprKind::Int(v) => {
-                if *v < i64::MIN as i128 || *v > i64::MAX as i128 {
-                    return Err(Diagnostic::error("E0115", sp, "this number does not fit in `int` (64-bit)"));
-                }
-                texpr(TExprKind::Int(*v), Ty::Int, sp)
+                let ty = if fits(*v, &Ty::Int) && hint != Some(Ty::I128) { Ty::Int } else { Ty::I128 };
+                texpr(TExprKind::Int(*v), ty, sp)
             }
             ExprKind::Bool(b) => texpr(TExprKind::Bool(*b), Ty::Bool, sp),
             ExprKind::Str(s) => texpr(TExprKind::Str(s.clone()), Ty::Str, sp),
@@ -759,13 +790,17 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Field(base, f) => {
                 if let ExprKind::Name(n) = &base.kind {
-                    if n == "int" && self.lookup(n).is_none() {
-                        let v = match f.as_str() {
-                            "min" => i64::MIN as i128,
-                            "max" => i64::MAX as i128,
-                            _ => return Err(Diagnostic::error("E0103", sp, format!("`int` has no constant `{f}`")).with_fix("use `int.min` or `int.max`")),
+                    if (n == "int" || n == "i128") && self.lookup(n).is_none() {
+                        let wide = n == "i128";
+                        let v = match (f.as_str(), wide) {
+                            ("min", false) => i64::MIN as i128,
+                            ("max", false) => i64::MAX as i128,
+                            ("min", true) => i128::MIN,
+                            ("max", true) => i128::MAX,
+                            _ => return Err(Diagnostic::error("E0103", sp, format!("`{n}` has no constant `{f}`")).with_fix(format!("use `{n}.min` or `{n}.max`"))),
                         };
-                        return Ok(texpr(TExprKind::Int(v), Ty::Int, sp));
+                        let ty = if wide || hint == Some(Ty::I128) { Ty::I128 } else { Ty::Int };
+                        return Ok(texpr(TExprKind::Int(v), ty, sp));
                     }
                 }
                 let b = self.infer(base, None)?;
@@ -839,15 +874,16 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Unary(op, x) => {
-                let t = match op {
+                let (t, ty) = match op {
                     UnOp::Neg => {
-                        let t = self.check_expr(x, None)?;
+                        let t = self.infer(x, hint.as_ref().filter(|h| **h == Ty::I128))?;
                         self.expect_int(&t)?;
-                        t
+                        let ty = if self.m.peel(&t.ty) == Ty::I128 { Ty::I128 } else { Ty::Int };
+                        (t, ty)
                     }
-                    UnOp::Not => self.check_expr(x, Some(&Ty::Bool))?,
+                    UnOp::Not => (self.check_expr(x, Some(&Ty::Bool))?, Ty::Bool),
+                    UnOp::Cast => unreachable!("conversions are parsed as calls"),
                 };
-                let ty = if *op == UnOp::Neg { Ty::Int } else { Ty::Bool };
                 texpr(TExprKind::Unary(*op, Box::new(t)), ty, sp)
             }
             ExprKind::Binary(op, l, r) => {
@@ -863,20 +899,30 @@ impl<'a> Checker<'a> {
                         texpr(TExprKind::Binary(*op, Box::new(lt), Box::new(rt)), Ty::Bool, sp)
                     }
                     Add | Sub | Mul | Div | Rem | Lt | Le | Gt | Ge => {
-                        let lt = self.check_expr(l, None)?;
+                        let cmp = matches!(op, Lt | Le | Gt | Ge);
+                        let h = if cmp { None } else { hint.clone().filter(|h| *h == Ty::I128) };
+                        let lt = self.infer(l, h.as_ref())?;
                         self.expect_int(&lt)?;
-                        let rt = self.check_expr(r, None)?;
+                        let rt = self.infer(r, h.as_ref())?;
                         self.expect_int(&rt)?;
-                        let ty = if matches!(op, Lt | Le | Gt | Ge) { Ty::Bool } else { Ty::Int };
+                        let (lt, rt, nt) = self.numeric_pair(lt, rt, sp)?;
+                        let ty = if cmp { Ty::Bool } else { nt };
                         texpr(TExprKind::Binary(*op, Box::new(lt), Box::new(rt)), ty, sp)
                     }
                     Eq | Ne => {
                         let lt = self.check_expr(l, None)?;
                         let rt = self.check_expr(r, None)?;
-                        if self.m.erase(&lt.ty) != self.m.erase(&rt.ty) && lt.ty != Ty::Never && rt.ty != Ty::Never {
-                            return Err(Diagnostic::error("E0102", sp, format!("cannot compare `{}` with `{}`", self.m.show(&lt.ty), self.m.show(&rt.ty))));
-                        }
-                        if self.mode == Mode::Code && !matches!(self.m.peel(&lt.ty), Ty::Int | Ty::Bool) {
+                        let number = |t: &TExpr| matches!(self.m.peel(&t.ty), Ty::Int | Ty::I128);
+                        let (lt, rt) = if number(&lt) && number(&rt) {
+                            let (lt, rt, _) = self.numeric_pair(lt, rt, sp)?;
+                            (lt, rt)
+                        } else {
+                            if self.m.erase(&lt.ty) != self.m.erase(&rt.ty) && lt.ty != Ty::Never && rt.ty != Ty::Never {
+                                return Err(Diagnostic::error("E0102", sp, format!("cannot compare `{}` with `{}`", self.m.show(&lt.ty), self.m.show(&rt.ty))));
+                            }
+                            (lt, rt)
+                        };
+                        if self.mode == Mode::Code && !matches!(self.m.peel(&lt.ty), Ty::Int | Ty::I128 | Ty::Bool) {
                             return Err(Diagnostic::error("E0116", sp, "v0.1 compares only numbers and booleans in code").with_fix("compare fields, or use `match`/`is`; whole values can be compared in contracts"));
                         }
                         texpr(TExprKind::Binary(*op, Box::new(lt), Box::new(rt)), Ty::Bool, sp)
@@ -987,17 +1033,27 @@ impl<'a> Checker<'a> {
                 }
                 texpr(TExprKind::ArrayRepeat(Box::new(ve), Box::new(ne)), Ty::Array(Box::new(et)), sp)
             }
-            ExprKind::Quant { forall, var, lo, hi, body } => {
+            ExprKind::Quant { q, var, lo, hi, body } => {
                 if self.mode == Mode::Code {
-                    return Err(Diagnostic::error("E0108", sp, "`forall` and `exists` are only allowed in contracts").with_fix("write a loop, or move the property into a `requires`, `ensures` or `invariant`"));
+                    return Err(Diagnostic::error("E0108", sp, "`forall`, `exists` and `sum` are only allowed in contracts").with_fix("write a loop, or move the property into a `requires`, `ensures` or `invariant`"));
                 }
                 let lo_e = self.check_expr(lo, Some(&Ty::Int))?;
                 let hi_e = self.check_expr(hi, Some(&Ty::Int))?;
                 self.scopes.push(HashMap::new());
                 let v = self.bind(var, Ty::Int, false);
-                let b = self.check_expr(body, Some(&Ty::Bool));
+                let b = if *q == Quantifier::Sum {
+                    self.check_expr(body, None).and_then(|b| self.expect_int(&b).map(|_| b))
+                } else {
+                    self.check_expr(body, Some(&Ty::Bool))
+                };
                 self.scopes.pop();
-                texpr(TExprKind::Quant { forall: *forall, var: v, lo: Box::new(lo_e), hi: Box::new(hi_e), body: Box::new(b?) }, Ty::Bool, sp)
+                let b = b?;
+                let ty = match q {
+                    Quantifier::Sum if self.m.peel(&b.ty) == Ty::I128 => Ty::I128,
+                    Quantifier::Sum => Ty::Int,
+                    _ => Ty::Bool,
+                };
+                texpr(TExprKind::Quant { q: *q, var: v, lo: Box::new(lo_e), hi: Box::new(hi_e), body: Box::new(b) }, ty, sp)
             }
             ExprKind::Named(l, _) => return Err(Diagnostic::error("E0117", sp, format!("`{l}: ...` labels are only allowed in call arguments"))),
         })
@@ -1130,7 +1186,7 @@ impl<'a> Checker<'a> {
                     let mut targs = vec![];
                     for a in args {
                         let t = self.check_expr(a, None)?;
-                        if !matches!(self.m.peel(&t.ty), Ty::Int | Ty::Bool | Ty::Str) {
+                        if !matches!(self.m.peel(&t.ty), Ty::Int | Ty::I128 | Ty::Bool | Ty::Str) {
                             return Err(Diagnostic::error("E0102", a.span, format!("`io.print` cannot print `{}` yet", self.m.show(&t.ty))).with_fix("print its fields one by one"));
                         }
                         targs.push(t);
@@ -1144,6 +1200,9 @@ impl<'a> Checker<'a> {
         };
         if self.variants.contains_key(name) && self.lookup(name).is_none() {
             return self.ctor(name, args, hint, sp);
+        }
+        if (name == "i128" || name == "int") && self.lookup(name).is_none() && !self.fn_index.contains_key(name) {
+            return self.convert(name, args, sp);
         }
         let Some(&fi) = self.fn_index.get(name) else {
             let mut d = Diagnostic::error("E0101", callee.span, format!("unknown function `{name}`"));
@@ -1169,6 +1228,48 @@ impl<'a> Checker<'a> {
             targs.push(self.check_expr(a, Some(&pt))?);
         }
         Ok(texpr(TExprKind::Call(fi, targs), ret, sp))
+    }
+
+    /// `i128(x)` widens an `int`; `int(x)` narrows an `i128`, and the verifier proves it fits.
+    fn convert(&mut self, name: &str, args: &[Expr], sp: Span) -> CResult<TExpr> {
+        let [a] = args else {
+            return Err(Diagnostic::error("E0107", sp, format!("`{name}(...)` converts exactly one number")));
+        };
+        let x = self.check_expr(a, None)?;
+        self.expect_int(&x)?;
+        let to = if name == "i128" { Ty::I128 } else { Ty::Int };
+        if let Some(v) = literal(&x) {
+            return retype(v, &to, x.span);
+        }
+        if self.m.peel(&x.ty) == to {
+            return Ok(x);
+        }
+        Ok(texpr(TExprKind::Unary(UnOp::Cast, Box::new(x)), to, sp))
+    }
+
+    /// Give two integer operands one type. A literal takes the other side's type. Otherwise
+    /// `int` and `i128` only mix in contracts, whose arithmetic is mathematical.
+    fn numeric_pair(&self, l: TExpr, r: TExpr, sp: Span) -> CResult<(TExpr, TExpr, Ty)> {
+        let (lw, rw) = (self.m.peel(&l.ty) == Ty::I128, self.m.peel(&r.ty) == Ty::I128);
+        if lw == rw || l.ty == Ty::Never || r.ty == Ty::Never {
+            let t = if lw || rw { Ty::I128 } else { Ty::Int };
+            return Ok((l, r, t));
+        }
+        if self.mode != Mode::Code {
+            return Ok((l, r, Ty::I128));
+        }
+        if let Some(v) = literal(&r) {
+            let t = self.m.peel(&l.ty);
+            let r = retype(v, &t, r.span)?;
+            return Ok((l, r, t));
+        }
+        if let Some(v) = literal(&l) {
+            let t = self.m.peel(&r.ty);
+            let l = retype(v, &t, l.span)?;
+            return Ok((l, r, t));
+        }
+        Err(Diagnostic::error("E0102", sp, "cannot mix `int` and `i128` in code")
+            .with_fix("convert one side: `i128(x)` widens an `int`, `int(x)` narrows an `i128` and must be proved to fit"))
     }
 
     /// Check `name: value` labels against the parameter names, in order. Labels are optional;

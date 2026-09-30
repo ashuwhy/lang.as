@@ -520,6 +520,8 @@ impl Parser {
                 self.bump();
                 ExprKind::Bool(false)
             }
+            // `sum` is a quantifier only in this shape, so it stays usable as a name.
+            Tok::Ident(n) if n == "sum" && matches!(self.peek_at(1), Tok::Ident(_)) && matches!(self.peek_at(2), Tok::Kw("in")) => return self.quantifier(Quantifier::Sum),
             Tok::Ident(n) => {
                 self.bump();
                 ExprKind::Name(n)
@@ -586,19 +588,8 @@ impl Parser {
                     }
                 }
             }
-            Tok::Kw(q @ ("forall" | "exists")) => {
-                self.bump();
-                let (var, _) = self.ident()?;
-                if !self.eat_kw("in") {
-                    return Err(self.err_here("expected `in`, as in `forall i in 0..n: ...`"));
-                }
-                let lo = self.expr_no_record()?;
-                self.expect_p("..")?;
-                let hi = self.expr_no_record()?;
-                self.expect_p(":")?;
-                let body = self.expr()?;
-                ExprKind::Quant { forall: q == "forall", var, lo: Box::new(lo), hi: Box::new(hi), body: Box::new(body) }
-            }
+            Tok::Kw("forall") => return self.quantifier(Quantifier::Forall),
+            Tok::Kw("exists") => return self.quantifier(Quantifier::Exists),
             Tok::Kw("if") => return self.if_expr(),
             Tok::Kw("match") => {
                 self.bump();
@@ -621,6 +612,21 @@ impl Parser {
             _ => return Err(self.err_here("expected an expression")),
         };
         Ok(Expr { kind, span: start.to(self.prev_span()) })
+    }
+
+    fn quantifier(&mut self, q: Quantifier) -> PResult<Expr> {
+        let start = self.span();
+        self.bump();
+        let (var, _) = self.ident()?;
+        if !self.eat_kw("in") {
+            return Err(self.err_here("expected `in`, as in `forall i in 0..n: ...`"));
+        }
+        let lo = self.expr_no_record()?;
+        self.expect_p("..")?;
+        let hi = self.expr_no_record()?;
+        self.expect_p(":")?;
+        let body = self.expr()?;
+        Ok(Expr { kind: ExprKind::Quant { q, var, lo: Box::new(lo), hi: Box::new(hi), body: Box::new(body) }, span: start.to(self.prev_span()) })
     }
 
     fn if_expr(&mut self) -> PResult<Expr> {

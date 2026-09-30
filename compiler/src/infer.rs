@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use crate::ast::BinOp;
+use crate::ast::{BinOp, Quantifier};
 use crate::diag::Span;
 use crate::tir::*;
 
@@ -232,7 +232,7 @@ pub fn candidates(m: &Module, consts: &[i128], modified: &[LocalId], scope: &[Te
         let t = TExpr { kind: TExprKind::Local(QUANT_VAR), ty: Ty::Int, span: sp };
         let at = TExpr { kind: TExprKind::Index(Box::new(local(a)), Box::new(t)), ty: Ty::Int, span: sp };
         let len = TExpr { kind: TExprKind::Len(Box::new(local(a))), ty: Ty::Int, span: sp };
-        let forall = |body: TExpr| TExpr { kind: TExprKind::Quant { forall: true, var: QUANT_VAR, lo: Box::new(int(0, sp)), hi: Box::new(len.clone()), body: Box::new(body) }, ty: Ty::Bool, span: sp };
+        let forall = |body: TExpr| TExpr { kind: TExprKind::Quant { q: Quantifier::Forall, var: QUANT_VAR, lo: Box::new(int(0, sp)), hi: Box::new(len.clone()), body: Box::new(body) }, ty: Ty::Bool, span: sp };
         let mut bodies: Vec<(TExpr, String, Option<(String, i128)>)> = vec![];
         for &c in consts {
             bodies.push((cmp(BinOp::Ge, at.clone(), int(c, sp)), format!("{an}[t] >= {}", num(c)), Some((format!("{a}[]>="), c))));
@@ -255,7 +255,100 @@ pub fn candidates(m: &Module, consts: &[i128], modified: &[LocalId], scope: &[Te
             out.push(Cand { e: forall(b), text: format!("forall t in 0..{an}.len: {text}"), group });
         }
     }
+    sorted_pushes(m, body, sp, &mut out);
     out
+}
+
+/// An array built by `push` in a loop is often sorted, and a caller must know that to call a
+/// function that requires it. Candidates: sorted so far, and the last element is at most each
+/// value the loop pushes (read at the top of the loop, so only if that value is visible there).
+fn sorted_pushes(m: &Module, body: &TExpr, sp: Span, out: &mut Vec<Cand>) {
+    let mut pushes: Vec<(LocalId, TExpr)> = vec![];
+    let (mut inner, mut lets): (Vec<LocalId>, Vec<LocalId>) = (vec![], vec![]);
+    walk(body, &mut |e| match &e.kind {
+        TExprKind::Is(_, p) => p.bindings(&mut inner),
+        TExprKind::Match(_, arms) => arms.iter().for_each(|(p, _)| p.bindings(&mut inner)),
+        TExprKind::Quant { var, .. } => inner.push(*var),
+        _ => {}
+    }, &mut |st| match st {
+        TStmt::Let(id, _) => lets.push(*id),
+        TStmt::Push(a, v, _) => pushes.push((*a, v.clone())),
+        _ => {}
+    });
+    inner.extend(lets);
+    let cmp = |op: BinOp, a: TExpr, b: TExpr| bin(op, a, b, Ty::Bool, sp);
+    let mut done = vec![];
+    for (a, v) in pushes {
+        let ty = m.locals[a as usize].ty.clone();
+        match m.peel(&ty) {
+            Ty::Array(e) if m.peel(&e) == Ty::Int => {}
+            _ => continue,
+        }
+        let an = m.locals[a as usize].name.clone();
+        let arr = TExpr { kind: TExprKind::Local(a), ty, span: sp };
+        let len = TExpr { kind: TExprKind::Len(Box::new(arr.clone())), ty: Ty::Int, span: sp };
+        let at = |i: TExpr| TExpr { kind: TExprKind::Index(Box::new(arr.clone()), Box::new(i)), ty: Ty::Int, span: sp };
+        if !done.contains(&a) {
+            done.push(a);
+            let t = TExpr { kind: TExprKind::Local(QUANT_VAR), ty: Ty::Int, span: sp };
+            let prev = bin(BinOp::Sub, t.clone(), int(1, sp), Ty::Int, sp);
+            for (op, sym, k) in [(BinOp::Le, "<=", 0), (BinOp::Lt, "<", 1)] {
+                let e = TExpr { kind: TExprKind::Quant { q: Quantifier::Forall, var: QUANT_VAR, lo: Box::new(int(1, sp)), hi: Box::new(len.clone()), body: Box::new(cmp(op, at(prev.clone()), at(t.clone()))) }, ty: Ty::Bool, span: sp };
+                out.push(Cand { e, text: format!("forall t in 1..{an}.len: {an}[t - 1] {sym} {an}[t]"), group: Some((format!("{a}sorted"), k)) });
+            }
+        }
+        let mut guards = vec![];
+        if !pushable(&v, &inner, &mut guards) {
+            continue;
+        }
+        let vt = show(m, &v);
+        let last = at(bin(BinOp::Sub, len.clone(), int(1, sp), Ty::Int, sp));
+        let mut cond = cmp(BinOp::Gt, len.clone(), int(0, sp));
+        let mut text = format!("{an}.len > 0");
+        for (x, k) in guards {
+            let xlen = TExpr { kind: TExprKind::Len(Box::new(x.clone())), ty: Ty::Int, span: sp };
+            text += &format!(" && {} < {}.len", show(m, &k), show(m, &x));
+            cond = bin(BinOp::And, cond, cmp(BinOp::Lt, k, xlen), Ty::Bool, sp);
+        }
+        for (op, sym, k) in [(BinOp::Le, "<=", 0), (BinOp::Lt, "<", 1)] {
+            let e = bin(BinOp::Implies, cond.clone(), cmp(op, last.clone(), v.clone()), Ty::Bool, sp);
+            out.push(Cand { e, text: format!("{text} ==> {an}[{an}.len - 1] {sym} {vt}"), group: Some((format!("{a}last{vt}"), k)) });
+        }
+    }
+}
+
+/// Can `e` be read at the top of the loop (no variable declared inside it, nothing but
+/// arithmetic and element reads)? Each element read `x[k]` needs `k < x.len` as a guard.
+fn pushable(e: &TExpr, inner: &[LocalId], guards: &mut Vec<(TExpr, TExpr)>) -> bool {
+    match &e.kind {
+        TExprKind::Int(_) => true,
+        TExprKind::Local(id) => !inner.contains(id),
+        TExprKind::Field(x, _) | TExprKind::Len(x) => pushable(x, inner, guards),
+        TExprKind::Unary(crate::ast::UnOp::Neg, x) => pushable(x, inner, guards),
+        TExprKind::Binary(BinOp::Add | BinOp::Sub | BinOp::Mul, a, b) => pushable(a, inner, guards) && pushable(b, inner, guards),
+        TExprKind::Index(x, k) => {
+            guards.push(((**x).clone(), (**k).clone()));
+            pushable(x, inner, guards) && pushable(k, inner, guards)
+        }
+        _ => false,
+    }
+}
+
+/// Source-like text of the simple expressions `pushable` accepts, for `--show-inferred`.
+fn show(m: &Module, e: &TExpr) -> String {
+    match &e.kind {
+        TExprKind::Int(v) => num(*v),
+        TExprKind::Local(id) => m.locals[*id as usize].name.clone(),
+        TExprKind::Len(x) => format!("{}.len", show(m, x)),
+        TExprKind::Field(x, i) => match m.peel(&x.ty) {
+            Ty::Record(r) => format!("{}.{}", show(m, x), m.records[r].fields[*i].0),
+            _ => show(m, x),
+        },
+        TExprKind::Unary(_, x) => format!("-{}", show(m, x)),
+        TExprKind::Binary(op, a, b) => format!("{} {} {}", show(m, a), op.symbol(), show(m, b)),
+        TExprKind::Index(x, k) => format!("{}[{}]", show(m, x), show(m, k)),
+        _ => "_".into(),
+    }
 }
 
 /// Candidate preconditions (over the parameters) and postconditions (over `result` and the
@@ -301,7 +394,7 @@ pub fn contract_candidates(m: &Module, f: &Func, consts: &[i128], sp: Span) -> (
         let t = TExpr { kind: TExprKind::Local(QUANT_VAR), ty: Ty::Int, span: sp };
         let at = TExpr { kind: TExprKind::Index(Box::new(arr.clone()), Box::new(t)), ty: Ty::Int, span: sp };
         let len = len_of(arr);
-        let forall = |body: TExpr| TExpr { kind: TExprKind::Quant { forall: true, var: QUANT_VAR, lo: Box::new(int(0, sp)), hi: Box::new(len.clone()), body: Box::new(body) }, ty: Ty::Bool, span: sp };
+        let forall = |body: TExpr| TExpr { kind: TExprKind::Quant { q: Quantifier::Forall, var: QUANT_VAR, lo: Box::new(int(0, sp)), hi: Box::new(len.clone()), body: Box::new(body) }, ty: Ty::Bool, span: sp };
         let each = |b: String| format!("forall t in 0..{an}.len: {an}[t] {b}");
         out.push(Cand { e: forall(cmp(BinOp::Ge, at.clone(), int(0, sp))), text: each(">= 0".into()), group: None });
         for &c in consts.iter().filter(|c| **c > 0) {

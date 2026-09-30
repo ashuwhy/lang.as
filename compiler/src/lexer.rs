@@ -106,8 +106,8 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
             }
             let digits: String = src[digits_start..i].chars().filter(|c| *c != '_').collect();
             match i128::from_str_radix(&digits, radix) {
-                Ok(v) if v <= u64::MAX as i128 => Tok::Int(v),
-                _ => return Err(Diagnostic::error("E0001", Span::new(start, i), "integer literal is too large").with_note("`int` is a 64-bit signed integer")),
+                Ok(v) => Tok::Int(v),
+                _ => return Err(Diagnostic::error("E0001", Span::new(start, i), "integer literal is too large").with_note("the widest integer type is `i128`, up to `i128.max`")),
             }
         } else if c == b'"' {
             i += 1;
