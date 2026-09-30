@@ -1,0 +1,62 @@
+[package]
+name = "aslang"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ashutosh Sharma <ashutoshsharmawhy@gmail.com>"]
+description = "A high-performance multi-language programming language"
+license = "MIT"
+copyright = "© 2026 Ashutosh Sharma"
+
+[dependencies]
+clap = { version = "3.0", features = ["derive"] }
+pyo3 = { version = "0.18", optional = true }
+libc = "0.2"
+libloading = "0.7"
+crossbeam = "0.8"
+rayon = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ndarray = "0.15"
+rustyline = "17.0.2"
+lsp-server = "0.7.9"
+
+[features]
+default = ["python"]
+python = ["pyo3/extension-module"]
+
+[build-dependencies]
+cc = "1.0"
+cmake = "0.1"
+bindgen = "0.69.1"
+
+[[bin]]
+name = "aslang"
+path = "src/core/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+
+[lib]
+name = "aslang"
+path = "src/core/lib.rs"
+crate-type = ["lib", "cdylib"]
+
+[workspace]
+members = [
+    ".",
+    "bindings/rust/array_ops",
+    "bindings/wasm"
+]
+
+[workspace.dependencies]
+pyo3 = { version = "0.18", features = ["extension-module"] }
+rayon = "1.5"
+ndarray = "0.15"
+num = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console", "Document", "Element", "HtmlElement", "Window"] } 

@@ -153,3 +153,5 @@ cover/
 *.swp
 *.swo
 *~
+# Compiler output
+/target/
