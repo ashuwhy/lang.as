@@ -88,4 +88,14 @@ reported separately and not counted.
 
 ## Changes after pre-registration
 
-(none yet)
+- 2026-09-30, after the pilot and before any counted run: the token metrics are fixed as
+  follows, because the transcripts record output tokens only as mid-stream snapshots.
+  **T_ctx** (primary): the size of the agent's conversation at its last model call, that is,
+  everything it read and wrote (the runner's own figure matches it to within the last reply).
+  **T_proc**: prompt tokens summed over all its model calls (grows with the number of turns).
+  **T_work**: T_ctx minus the first call's prompt (the agent's fixed system prompt plus the
+  task, the same size for both arms), i.e. the task-specific part. Wall time and tool calls
+  come from the same transcripts. Pilot (`midpoint`, not counted): Rust 25/25 tests, T_ctx
+  49,024, T_work 3,703, 2 tool calls, 11.5 s; Touchmark 25/25 tests, T_ctx 54,736, T_work
+  9,382, 4 tool calls, 23.3 s. No agent read files outside its directory. Usage script SHA-256:
+  `c9178953940760eda8b440af13e845defd3b654c5767ceb27fb5c2b11ad708d5`.
