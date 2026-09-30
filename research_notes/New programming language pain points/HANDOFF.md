@@ -2,6 +2,17 @@
 
 Read this file before doing anything else in a new session.
 
+## Decision, 2026-09-30 (owner): build a new native language
+
+The owner read the Phase 0 LemmaScript assessment (`phase0/lemmascript_assessment.md`) and
+decided **not** to build tools on top of LemmaScript or any other existing toolchain, and not to
+emit TypeScript first. The project is now a new, native, memory-safe language designed for AI
+authorship: safe, token-efficient, and competing head-on with Rust, Go and Zig. The report's
+core ideas carry over (pinned contracts, SMT-checked `requires`/`ensures`, declared effects,
+sealed boundaries, no escape hatches); the first backend is native code via C. The design is
+`docs/DESIGN.md`; the compiler lives in `compiler/`. Phase 0's four-arm study is replaced by an
+evaluation of the language itself at v0.2. Do not reopen this decision without new evidence.
+
 ## The request
 
 Find the single biggest real pain point in software development today (September 2026)
