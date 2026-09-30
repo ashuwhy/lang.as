@@ -203,8 +203,9 @@ from the same checked IR.
 | Diagnostics as instructions, in text and JSON; `aslang explain` | yes |
 | Named arguments checked against parameter names | yes |
 | Proved facts passed to the C optimiser; proved-safe 32-bit and unsigned division | yes |
-| `llms.txt`: the complete v0.1 reference (2,370 tokens) | yes |
-| Strings, arrays, maps, recursive enums (Perceus RC), `for` loops | v0.2 |
+| `llms.txt`: the complete reference (2,888 tokens at v0.2) | yes |
+| Arrays with proved bounds, reference counting, copy-on-write, last-use moves; `for` loops; `forall`/`exists` | done (v0.2) |
+| Strings, maps, arrays inside other values, recursive enums | v0.2/v0.3 |
 | Generics, modules, `?`, sized integers, recursion termination | v0.2 |
 | C ABI export (`.h` + static library) and import through `uses ffi` | v0.2 |
 | `Untrusted<T>` decoders, taint sinks, capabilities as values | v0.3 |

@@ -33,16 +33,24 @@ Done, all on `research/language-pain-points`:
 - `bench/perf/`: AS against Rust. On this container AS beat Rust on `primes`, tied checked
   Rust on `collatz`, and was within about 12% of unchecked Rust on `isqrt`.
 
+Later the same day (v0.2, arrays): `[T]` arrays with proved bounds, reference counting with
+copy-on-write and last-use moves (`compiler/src/own.rs`), `for` loops with generated invariants
+and termination measures, `forall`/`exists` in contracts, and a frame rule that keeps array
+lengths across loops that only write elements. `bench/arrays/` compares AS with C, C++, Rust,
+Go, Java, JavaScript and Python on four workloads (`RESULTS.md`): AS is in the C/Rust band on
+all four with every check proved; AddressSanitizer finds no leaks or memory errors.
+
 Next, in order:
 
-1. v0.2 heap values: strings, arrays (with proved bounds checks), recursive enums, using
-   Perceus-style reference counting with in-place reuse. Arrays unlock most real benchmarks.
-2. Generics, modules, `?`, `for` loops, sized integers, termination of recursion.
-3. More proof-driven optimisation: bounds-check elimination, `restrict` from value semantics,
-   narrowing of proved-small integers; add array-heavy benchmarks against Rust and C.
-4. The v0.2 agent evaluation described in `docs/DESIGN.md` (AS vs Rust vs TypeScript on
-   bug-prone tasks; escaped defects and total agent tokens).
-5. Consider filing the LemmaScript vacuity issue drafted at the end of
+1. Loop-invariant inference (bounds and element-range invariants), to shrink the contract
+   tokens that make AS sources longer than Rust's in `bench/arrays/RESULTS.md`.
+2. Strings, arrays inside records and enums, recursive enums (heap values in general).
+3. Generics, modules, `?`, sized integers, termination of recursion; floats.
+4. More proof-driven optimisation (`restrict` from value semantics, narrowing proved-small
+   integers), and benchmarks with floats and strings.
+5. The agent evaluation described in `docs/DESIGN.md` (AS vs Rust vs TypeScript on bug-prone
+   tasks; escaped defects and total agent tokens).
+6. Consider filing the LemmaScript vacuity issue drafted at the end of
    `phase0/lemmascript_assessment.md` (owner's decision).
 
 ## The request

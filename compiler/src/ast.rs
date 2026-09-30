@@ -63,12 +63,13 @@ pub enum TypeExpr {
     Name(String, Vec<TypeExpr>, Span),
     Record(Vec<(String, TypeExpr)>, Span),
     Opt(Box<TypeExpr>, Span),
+    Array(Box<TypeExpr>, Span),
 }
 
 impl TypeExpr {
     pub fn span(&self) -> Span {
         match self {
-            TypeExpr::Name(_, _, s) | TypeExpr::Record(_, s) | TypeExpr::Opt(_, s) => *s,
+            TypeExpr::Name(_, _, s) | TypeExpr::Record(_, s) | TypeExpr::Opt(_, s) | TypeExpr::Array(_, s) => *s,
         }
     }
 }
@@ -86,6 +87,10 @@ pub enum Stmt {
     Expr(Expr),
     Return(Option<Expr>, Span),
     While { cond: Expr, invariants: Vec<Expr>, decreases: Option<Expr>, body: Block, span: Span },
+    /// `a[i] = v`, `a[i] += v`
+    IndexAssign { name: String, index: Expr, op: Option<BinOp>, value: Expr, span: Span },
+    /// `for i in lo..hi invariant ... { body }`
+    For { var: String, lo: Expr, hi: Expr, invariants: Vec<Expr>, body: Block, span: Span },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,6 +159,12 @@ pub enum ExprKind {
     If(Box<Expr>, Block, Option<Box<Expr>>),
     Match(Box<Expr>, Vec<Arm>),
     Block(Block),
+    Index(Box<Expr>, Box<Expr>),
+    ArrayLit(Vec<Expr>),
+    /// `[value; count]`
+    ArrayRepeat(Box<Expr>, Box<Expr>),
+    /// `forall i in lo..hi: body` (or `exists`), only in contracts.
+    Quant { forall: bool, var: String, lo: Box<Expr>, hi: Box<Expr>, body: Box<Expr> },
     /// `name: value` inside a call's argument list.
     Named(String, Box<Expr>),
 }

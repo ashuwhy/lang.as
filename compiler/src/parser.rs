@@ -219,7 +219,11 @@ impl Parser {
 
     fn type_expr(&mut self) -> PResult<TypeExpr> {
         let start = self.span();
-        let base = if self.eat_p("{") {
+        let base = if self.eat_p("[") {
+            let elem = self.type_expr()?;
+            self.expect_p("]")?;
+            TypeExpr::Array(Box::new(elem), start.to(self.prev_span()))
+        } else if self.eat_p("{") {
             let mut fields = Vec::new();
             loop {
                 self.skip_semis();
@@ -306,6 +310,46 @@ impl Parser {
             }
             let body = self.block()?;
             return Ok(Stmt::While { cond, invariants, decreases, span: start.to(body.span), body });
+        }
+        if self.eat_kw("for") {
+            let (var, _) = self.ident()?;
+            if !self.eat_kw("in") {
+                return Err(self.err_here("expected `in` after the loop variable"));
+            }
+            let lo = self.expr_no_record()?;
+            self.expect_p("..")?;
+            let hi = self.expr_no_record()?;
+            let mut invariants = vec![];
+            loop {
+                self.skip_semis();
+                if self.eat_kw("invariant") {
+                    invariants.push(self.expr_no_record()?);
+                } else {
+                    break;
+                }
+            }
+            let body = self.block()?;
+            return Ok(Stmt::For { var, lo, hi, invariants, span: start.to(body.span), body });
+        }
+        if let (Tok::Ident(name), Tok::P("[")) = (self.peek().clone(), self.peek_at(1).clone()) {
+            let target = self.expr()?;
+            let op = match self.peek() {
+                Tok::P("=") => Some(None),
+                Tok::P("+=") => Some(Some(BinOp::Add)),
+                Tok::P("-=") => Some(Some(BinOp::Sub)),
+                Tok::P("*=") => Some(Some(BinOp::Mul)),
+                _ => None,
+            };
+            let Some(op) = op else { return Ok(Stmt::Expr(target)) };
+            let ExprKind::Index(base, index) = target.kind else {
+                return Err(Diagnostic::error("E0002", target.span, "only a variable or `name[index]` can be assigned"));
+            };
+            if !matches!(&base.kind, ExprKind::Name(n) if *n == name) {
+                return Err(Diagnostic::error("E0002", base.span, "only `name[index]` can be assigned"));
+            }
+            self.bump();
+            let value = self.expr()?;
+            return Ok(Stmt::IndexAssign { name, index: *index, op, span: start.to(value.span), value });
         }
         if let Tok::Ident(name) = self.peek().clone() {
             let op = match self.peek_at(1) {
@@ -406,6 +450,13 @@ impl Parser {
             if self.eat_p(".") {
                 let (f, fs) = self.ident()?;
                 e = Expr { span: e.span.to(fs), kind: ExprKind::Field(Box::new(e), f) };
+            } else if self.is_p("[") && !self.toks[self.pos].newline_before {
+                self.bump();
+                self.skip_semis();
+                let idx = self.expr()?;
+                self.skip_semis();
+                self.expect_p("]")?;
+                e = Expr { span: e.span.to(self.prev_span()), kind: ExprKind::Index(Box::new(e), Box::new(idx)) };
             } else if self.is_p("(") {
                 self.bump();
                 let args = self.comma_list(")")?;
@@ -510,6 +561,44 @@ impl Parser {
                 ExprKind::Record { spread, fields }
             }
             Tok::P("{") => ExprKind::Block(self.block()?),
+            Tok::P("[") => {
+                self.bump();
+                self.skip_semis();
+                if self.eat_p("]") {
+                    ExprKind::ArrayLit(vec![])
+                } else {
+                    let first = self.expr()?;
+                    // An explicit `;` (not an automatic line end) makes `[value; count]`.
+                    if self.peek() == &Tok::Semi && self.toks[self.pos].span.lo != self.toks[self.pos].span.hi {
+                        self.bump();
+                        let count = self.expr()?;
+                        self.expect_p("]")?;
+                        ExprKind::ArrayRepeat(Box::new(first), Box::new(count))
+                    } else {
+                        let mut items = vec![first];
+                        self.skip_semis();
+                        if self.eat_p(",") {
+                            items.extend(self.comma_list("]")?);
+                        } else {
+                            self.expect_p("]")?;
+                        }
+                        ExprKind::ArrayLit(items)
+                    }
+                }
+            }
+            Tok::Kw(q @ ("forall" | "exists")) => {
+                self.bump();
+                let (var, _) = self.ident()?;
+                if !self.eat_kw("in") {
+                    return Err(self.err_here("expected `in`, as in `forall i in 0..n: ...`"));
+                }
+                let lo = self.expr_no_record()?;
+                self.expect_p("..")?;
+                let hi = self.expr_no_record()?;
+                self.expect_p(":")?;
+                let body = self.expr()?;
+                ExprKind::Quant { forall: q == "forall", var, lo: Box::new(lo), hi: Box::new(hi), body: Box::new(body) }
+            }
             Tok::Kw("if") => return self.if_expr(),
             Tok::Kw("match") => {
                 self.bump();

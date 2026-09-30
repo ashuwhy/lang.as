@@ -17,6 +17,7 @@ pub enum Ty {
     Alias(usize),
     Option(Box<Ty>),
     Result(Box<Ty>, Box<Ty>),
+    Array(Box<Ty>),
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +110,11 @@ pub enum TExprKind {
     Block(Vec<TStmt>, Box<TExpr>),
     /// The value must satisfy the refinement of this alias.
     Coerce(Box<TExpr>, usize),
+    Index(Box<TExpr>, Box<TExpr>),
+    Len(Box<TExpr>),
+    ArrayLit(Vec<TExpr>),
+    ArrayRepeat(Box<TExpr>, Box<TExpr>),
+    Quant { forall: bool, var: LocalId, lo: Box<TExpr>, hi: Box<TExpr>, body: Box<TExpr> },
 }
 
 #[derive(Clone, Debug)]
@@ -118,6 +124,8 @@ pub enum TStmt {
     Expr(TExpr),
     Return(TExpr, Span),
     While { cond: TExpr, invariants: Vec<TExpr>, decreases: Option<TExpr>, body: TExpr, modified: Vec<LocalId>, span: Span },
+    IndexAssign(LocalId, TExpr, TExpr, Span),
+    Push(LocalId, TExpr, Span),
 }
 
 #[derive(Clone, Debug)]
@@ -152,7 +160,19 @@ impl Module {
             Ty::Alias(a) => self.erase(&self.aliases[*a].base),
             Ty::Option(x) => Ty::Option(Box::new(self.erase(x))),
             Ty::Result(a, b) => Ty::Result(Box::new(self.erase(a)), Box::new(self.erase(b))),
+            Ty::Array(x) => Ty::Array(Box::new(self.erase(x))),
             _ => t.clone(),
+        }
+    }
+
+    pub fn contains_array(&self, t: &Ty) -> bool {
+        match self.peel(t) {
+            Ty::Array(_) => true,
+            Ty::Option(x) => self.contains_array(&x),
+            Ty::Result(a, b) => self.contains_array(&a) || self.contains_array(&b),
+            Ty::Record(r) => self.records[r].fields.iter().any(|(_, f)| self.contains_array(f)),
+            Ty::Enum(e) => self.enums[e].variants.iter().any(|v| v.fields.iter().any(|(_, f)| self.contains_array(f))),
+            _ => false,
         }
     }
 
@@ -178,6 +198,7 @@ impl Module {
             Ty::Alias(a) => self.aliases[*a].name.clone(),
             Ty::Option(x) => format!("{}?", self.show(x)),
             Ty::Result(a, b) => format!("Result<{}, {}>", self.show(a), self.show(b)),
+            Ty::Array(x) => format!("[{}]", self.show(x)),
         }
     }
 }

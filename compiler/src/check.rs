@@ -139,6 +139,7 @@ impl<'a> Checker<'a> {
                                     self.diags.push(Diagnostic::error("E0109", fte.span(), format!("field `{f}` appears twice")));
                                 }
                                 match self.resolve_type(fte) {
+                                    Ok(ft) if self.m.contains_array(&ft) => self.diags.push(no_array_inside(fte.span())),
                                     Ok(ft) => out.push((f.clone(), ft)),
                                     Err(d) => self.diags.push(d),
                                 }
@@ -170,6 +171,7 @@ impl<'a> Checker<'a> {
                         let mut fields = vec![];
                         for (f, fte) in &v.fields {
                             match self.resolve_type(fte) {
+                                Ok(ft) if self.m.contains_array(&ft) => self.diags.push(no_array_inside(fte.span())),
                                 Ok(ft) => fields.push((f.clone(), ft)),
                                 Err(d) => self.diags.push(d),
                             }
@@ -340,7 +342,20 @@ impl<'a> Checker<'a> {
 
     fn resolve_type(&mut self, te: &TypeExpr) -> CResult<Ty> {
         match te {
-            TypeExpr::Opt(inner, _) => Ok(Ty::Option(Box::new(self.resolve_type(inner)?))),
+            TypeExpr::Opt(inner, sp) => {
+                let t = self.resolve_type(inner)?;
+                if self.m.contains_array(&t) {
+                    return Err(no_array_inside(*sp));
+                }
+                Ok(Ty::Option(Box::new(t)))
+            }
+            TypeExpr::Array(inner, sp) => {
+                let t = self.resolve_type(inner)?;
+                if self.m.contains_array(&t) {
+                    return Err(no_array_inside(*sp));
+                }
+                Ok(Ty::Array(Box::new(t)))
+            }
             TypeExpr::Record(_, sp) => Err(Diagnostic::error("E0112", *sp, "record types must be named").with_fix("declare it with `type Name = { ... }` and use `Name` here")),
             TypeExpr::Name(n, args, sp) => {
                 let want = |k: usize, this: &Self| -> CResult<()> {
@@ -358,7 +373,11 @@ impl<'a> Checker<'a> {
                     }
                     "Result" => {
                         want(2, self)?;
-                        Ok(Ty::Result(Box::new(self.resolve_type(&args[0])?), Box::new(self.resolve_type(&args[1])?)))
+                        let r = Ty::Result(Box::new(self.resolve_type(&args[0])?), Box::new(self.resolve_type(&args[1])?));
+                        if self.m.contains_array(&r) {
+                            return Err(no_array_inside(*sp));
+                        }
+                        Ok(r)
                     }
                     _ => {
                         want(0, self)?;
@@ -561,6 +580,30 @@ impl<'a> Checker<'a> {
                 let e = self.check_expr(&rhs, Some(&lty))?;
                 Ok(TStmt::Assign(id, e))
             }
+            Stmt::IndexAssign { name, index, op, value, span } => {
+                let (id, elem) = self.array_var(name, *span)?;
+                let idx = self.check_expr(index, Some(&Ty::Int))?;
+                let rhs = match op {
+                    None => value.clone(),
+                    Some(op) => Expr {
+                        kind: ExprKind::Binary(*op, Box::new(Expr { kind: ExprKind::Index(Box::new(Expr { kind: ExprKind::Name(name.clone()), span: *span }), Box::new(index.clone())), span: *span }), Box::new(value.clone())),
+                        span: *span,
+                    },
+                };
+                let v = self.check_expr(&rhs, Some(&elem))?;
+                Ok(TStmt::IndexAssign(id, idx, v, *span))
+            }
+            Stmt::Expr(Expr { kind: ExprKind::Call(callee, args), span }) if matches!(&callee.kind, ExprKind::Field(b, f) if f == "push" && matches!(&b.kind, ExprKind::Name(n) if self.lookup(n).is_some())) => {
+                let ExprKind::Field(b, _) = &callee.kind else { unreachable!() };
+                let ExprKind::Name(name) = &b.kind else { unreachable!() };
+                let (id, elem) = self.array_var(name, *span)?;
+                if args.len() != 1 {
+                    return Err(Diagnostic::error("E0107", *span, "`push` takes one value"));
+                }
+                let v = self.check_expr(&args[0], Some(&elem))?;
+                Ok(TStmt::Push(id, v, *span))
+            }
+            Stmt::For { var, lo, hi, invariants, body, span } => self.check_for(var, lo, hi, invariants, body, *span),
             Stmt::Expr(e) => {
                 let te = self.check_expr(e, None)?;
                 if matches!(self.m.peel(&te.ty), Ty::Result(..)) {
@@ -598,6 +641,73 @@ impl<'a> Checker<'a> {
                 Ok(TStmt::While { cond: c, invariants: invs, decreases: dec, body: b, modified, span: *span })
             }
         }
+    }
+
+    /// A `var` of array type, for `a[i] = v` and `a.push(v)`.
+    fn array_var(&mut self, name: &str, sp: Span) -> CResult<(LocalId, Ty)> {
+        let Some((id, mutable)) = self.lookup(name) else {
+            return Err(Diagnostic::error("E0101", sp, format!("unknown variable `{name}`")));
+        };
+        let Ty::Array(elem) = self.m.peel(&self.m.locals[id as usize].ty) else {
+            return Err(Diagnostic::error("E0102", sp, format!("`{name}` is not an array")));
+        };
+        if !mutable {
+            return Err(Diagnostic::error("E0111", sp, format!("`{name}` cannot be changed")).with_fix(format!("copy it into a variable first: `var {name}2 = {name}`, or declare it with `var`")));
+        }
+        Ok((id, *elem))
+    }
+
+    /// `for i in lo..hi { body }` becomes a `while` loop whose invariant and measure are
+    /// generated, so every `for` loop is proved to terminate.
+    fn check_for(&mut self, var: &str, lo: &Expr, hi: &Expr, invariants: &[Expr], body: &Block, sp: Span) -> CResult<TStmt> {
+        let lo_e = self.check_expr(lo, Some(&Ty::Int))?;
+        let hi_e = self.check_expr(hi, Some(&Ty::Int))?;
+        self.scopes.push(HashMap::new());
+        let lo_id = self.new_local("_lo", Ty::Int);
+        let hi_id = self.new_local("_hi", Ty::Int);
+        let i = self.bind(var, Ty::Int, false);
+        let l = |id| texpr_local(id, Ty::Int, sp);
+        // lo <= i && (i <= hi || i == lo)
+        let auto = bin(
+            BinOp::And,
+            bin(BinOp::Le, l(lo_id), l(i), Ty::Bool, sp),
+            bin(BinOp::Or, bin(BinOp::Le, l(i), l(hi_id), Ty::Bool, sp), bin(BinOp::Eq, l(i), l(lo_id), Ty::Bool, sp), Ty::Bool, sp),
+            Ty::Bool,
+            sp,
+        );
+        let saved = self.mode;
+        self.mode = Mode::Requires;
+        let mut invs = vec![auto];
+        for inv in invariants {
+            match self.check_expr(inv, Some(&Ty::Bool)) {
+                Ok(t) => invs.push(t),
+                Err(d) => {
+                    self.mode = saved;
+                    self.scopes.pop();
+                    return Err(d);
+                }
+            }
+        }
+        self.mode = saved;
+        let user = self.check_block(body, Some(&Ty::Unit));
+        self.scopes.pop();
+        let user = user?;
+        let step = TStmt::Assign(i, bin(BinOp::Add, l(i), texpr(TExprKind::Int(1), Ty::Int, sp), Ty::Int, sp));
+        let body = texpr(TExprKind::Block(vec![TStmt::Expr(user), step], Box::new(texpr(TExprKind::Unit, Ty::Unit, sp))), Ty::Unit, sp);
+        let mut modified = vec![];
+        collect_assigned(&body, &mut modified);
+        modified.sort();
+        modified.dedup();
+        let w = TStmt::While {
+            cond: bin(BinOp::Lt, l(i), l(hi_id), Ty::Bool, sp),
+            invariants: invs,
+            decreases: Some(bin(BinOp::Sub, l(hi_id), l(i), Ty::Int, sp)),
+            body,
+            modified,
+            span: sp,
+        };
+        let stmts = vec![TStmt::Let(lo_id, lo_e), TStmt::Let(hi_id, hi_e), TStmt::Let(i, l(lo_id)), w];
+        Ok(TStmt::Expr(texpr(TExprKind::Block(stmts, Box::new(texpr(TExprKind::Unit, Ty::Unit, sp))), Ty::Unit, sp)))
     }
 
     fn check_expr(&mut self, e: &Expr, expected: Option<&Ty>) -> CResult<TExpr> {
@@ -657,6 +767,12 @@ impl<'a> Checker<'a> {
                     }
                 }
                 let b = self.infer(base, None)?;
+                if let Ty::Array(_) = self.m.peel(&b.ty) {
+                    if f == "len" {
+                        return Ok(texpr(TExprKind::Len(Box::new(b)), Ty::Int, sp));
+                    }
+                    return Err(Diagnostic::error("E0103", sp, format!("arrays have `.len`, not `.{f}`")).with_note("arrays support `a[i]`, `a[i] = v`, `a.push(v)` and `a.len`"));
+                }
                 let Ty::Record(r) = self.m.peel(&b.ty) else {
                     return Err(Diagnostic::error("E0103", sp, format!("`{}` has no fields", self.m.show(&b.ty))));
                 };
@@ -826,6 +942,61 @@ impl<'a> Checker<'a> {
                 texpr(TExprKind::Match(Box::new(s), tarms), ty, sp)
             }
             ExprKind::Block(b) => self.check_block(b, expected)?,
+            ExprKind::Index(base, idx) => {
+                let b = self.check_expr(base, None)?;
+                let Ty::Array(elem) = self.m.peel(&b.ty) else {
+                    return Err(Diagnostic::error("E0102", base.span, format!("only arrays can be indexed, found `{}`", self.m.show(&b.ty))));
+                };
+                let i = self.check_expr(idx, Some(&Ty::Int))?;
+                texpr(TExprKind::Index(Box::new(b), Box::new(i)), *elem, sp)
+            }
+            ExprKind::ArrayLit(items) => {
+                let elem = match &hint {
+                    Some(Ty::Array(t)) => Some((**t).clone()),
+                    _ => None,
+                };
+                let mut out = vec![];
+                let mut et = elem.clone();
+                for it in items {
+                    let t = self.check_expr(it, et.as_ref())?;
+                    if et.is_none() {
+                        et = Some(t.ty.clone());
+                    }
+                    out.push(t);
+                }
+                let Some(et) = et else {
+                    return Err(Diagnostic::error("E0105", sp, "cannot tell the element type of `[]`").with_fix("annotate it, e.g. `let a: [int] = []`"));
+                };
+                if self.m.contains_array(&et) {
+                    return Err(no_array_inside(sp));
+                }
+                texpr(TExprKind::ArrayLit(out), Ty::Array(Box::new(et)), sp)
+            }
+            ExprKind::ArrayRepeat(v, n) => {
+                let elem = match &hint {
+                    Some(Ty::Array(t)) => Some((**t).clone()),
+                    _ => None,
+                };
+                let ve = self.check_expr(v, elem.as_ref())?;
+                let ne = self.check_expr(n, Some(&Ty::Int))?;
+                let et = elem.unwrap_or(ve.ty.clone());
+                if self.m.contains_array(&et) {
+                    return Err(no_array_inside(sp));
+                }
+                texpr(TExprKind::ArrayRepeat(Box::new(ve), Box::new(ne)), Ty::Array(Box::new(et)), sp)
+            }
+            ExprKind::Quant { forall, var, lo, hi, body } => {
+                if self.mode == Mode::Code {
+                    return Err(Diagnostic::error("E0108", sp, "`forall` and `exists` are only allowed in contracts").with_fix("write a loop, or move the property into a `requires`, `ensures` or `invariant`"));
+                }
+                let lo_e = self.check_expr(lo, Some(&Ty::Int))?;
+                let hi_e = self.check_expr(hi, Some(&Ty::Int))?;
+                self.scopes.push(HashMap::new());
+                let v = self.bind(var, Ty::Int, false);
+                let b = self.check_expr(body, Some(&Ty::Bool));
+                self.scopes.pop();
+                texpr(TExprKind::Quant { forall: *forall, var: v, lo: Box::new(lo_e), hi: Box::new(hi_e), body: Box::new(b?) }, Ty::Bool, sp)
+            }
             ExprKind::Named(l, _) => return Err(Diagnostic::error("E0117", sp, format!("`{l}: ...` labels are only allowed in call arguments"))),
         })
     }
@@ -1032,6 +1203,18 @@ impl<'a> Checker<'a> {
     }
 }
 
+fn no_array_inside(sp: Span) -> Diagnostic {
+    Diagnostic::error("E0118", sp, "arrays cannot be stored inside records, enums, options or other arrays yet").with_note("v0.2 supports arrays as variables, parameters and return values; nesting arrives with the heap-value work in v0.3")
+}
+
+fn texpr_local(id: LocalId, ty: Ty, sp: Span) -> TExpr {
+    texpr(TExprKind::Local(id), ty, sp)
+}
+
+fn bin(op: BinOp, a: TExpr, b: TExpr, ty: Ty, sp: Span) -> TExpr {
+    texpr(TExprKind::Binary(op, Box::new(a), Box::new(b)), ty, sp)
+}
+
 fn positive_bindings(e: &TExpr, out: &mut Vec<LocalId>) {
     match &e.kind {
         TExprKind::Is(_, p) => p.bindings(out),
@@ -1055,6 +1238,15 @@ fn collect_assigned(e: &TExpr, out: &mut Vec<LocalId>) {
                 collect_assigned(cond, out);
                 collect_assigned(body, out);
             }
+            TStmt::IndexAssign(id, i, v, _) => {
+                out.push(*id);
+                collect_assigned(i, out);
+                collect_assigned(v, out);
+            }
+            TStmt::Push(id, v, _) => {
+                out.push(*id);
+                collect_assigned(v, out);
+            }
         }
     }
     match &e.kind {
@@ -1071,11 +1263,12 @@ fn collect_assigned(e: &TExpr, out: &mut Vec<LocalId>) {
             collect_assigned(s, out);
             arms.iter().for_each(|(_, b)| collect_assigned(b, out));
         }
-        TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Is(x, _) | TExprKind::Coerce(x, _) => collect_assigned(x, out),
-        TExprKind::Binary(_, a, b) => {
+        TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Is(x, _) | TExprKind::Coerce(x, _) | TExprKind::Len(x) => collect_assigned(x, out),
+        TExprKind::Binary(_, a, b) | TExprKind::Index(a, b) | TExprKind::ArrayRepeat(a, b) => {
             collect_assigned(a, out);
             collect_assigned(b, out);
         }
+        TExprKind::ArrayLit(xs) => xs.iter().for_each(|x| collect_assigned(x, out)),
         TExprKind::Record(xs) | TExprKind::Ctor(_, xs) | TExprKind::Call(_, xs) | TExprKind::Print(xs) => xs.iter().for_each(|x| collect_assigned(x, out)),
         TExprKind::Update(b, fs) => {
             collect_assigned(b, out);

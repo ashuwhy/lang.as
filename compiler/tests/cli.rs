@@ -30,6 +30,7 @@ fn verified_examples_run() {
         ("examples/ledger.as", "moved, new balance: 30"),
         ("examples/isqrt.as", "isqrt(99) = 9"),
         ("examples/sum.as", "sum_to(1000) = 500500"),
+        ("examples/arrays.as", "primes below 1000 = 168"),
     ] {
         let (code, out, err) = aslang(&["run", file], &root());
         assert_eq!(code, 0, "{file}: {err}");
@@ -114,4 +115,34 @@ fn explain_knows_every_code_it_emits() {
         assert_eq!(status, 0, "{c}");
         assert!(out.starts_with(c), "{out}");
     }
+}
+
+#[test]
+fn array_bugs_are_rejected() {
+    let arrays = example("examples/arrays.as");
+    expect_error("search_off_by_one", &arrays.replace("      hi = mid\n", "      hi = mid - 1\n"), "E0207");
+    expect_error("search_no_progress", &arrays.replace("      lo = mid + 1", "      lo = mid"), "E0208");
+    expect_error("sieve_overrun", &arrays.replace("      while j < n\n", "      while j <= n\n"), "E0210");
+    expect_error("unsorted_input", &arrays.replace("let a = [1, 3, 5, 7, 9, 11]", "let a = [1, 3, 5, 7, 2, 11]"), "E0203");
+    expect_error("loop_too_far", &arrays.replace("  for i in 2..n\n", "  for i in 2..n + 1\n"), "E0210");
+    expect_error("quantifier_in_code", "fn f(a: [int]) -> bool {\n  forall i in 0..a.len: a[i] > 0\n}\n", "E0108");
+    expect_error("array_in_record", "type Bag = { items: [int] }\n", "E0118");
+}
+
+#[test]
+fn arrays_are_memory_safe_under_asan() {
+    // Build the generated C with AddressSanitizer: no leaks, no use-after-free, no overflow.
+    let (code, c, err) = aslang(&["emit-c", "examples/arrays.as"], &root());
+    assert_eq!(code, 0, "{err}");
+    let dir = std::env::temp_dir().join(format!("aslang_asan_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.c"), c).unwrap();
+    let cc = Command::new("gcc").args(["-g", "-fsanitize=address,undefined", "-std=gnu11", "-w", "-o"]).arg(dir.join("a")).arg(dir.join("a.c")).status();
+    if !cc.map(|s| s.success()).unwrap_or(false) {
+        eprintln!("skipping: gcc with AddressSanitizer is not available");
+        return;
+    }
+    let out = Command::new(dir.join("a")).env("ASAN_OPTIONS", "detect_leaks=1").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("primes below 1000 = 168"));
 }

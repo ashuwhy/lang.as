@@ -24,11 +24,12 @@ pub struct Token {
 
 pub const KEYWORDS: &[&str] = &[
     "fn", "pub", "type", "enum", "let", "var", "if", "else", "match", "while", "return", "requires",
-    "ensures", "invariant", "decreases", "uses", "where", "true", "false", "is", "trusted",
+    "ensures", "invariant", "decreases", "uses", "where", "true", "false", "is", "trusted", "for", "in",
+    "forall", "exists",
 ];
 
 const PUNCT: &[&str] = &[
-    "==>", "...", "->", "=>", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "(", ")", "{",
+    "==>", "...", "..", "->", "=>", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "(", ")", "{",
     "}", "[", "]", ",", ":", ".", "=", "<", ">", "+", "-", "*", "/", "%", "!", "?",
 ];
 
@@ -42,7 +43,7 @@ fn continues_line(t: &Tok) -> bool {
     match t {
         Tok::P(p) => matches!(
             *p,
-            "." | "&&" | "||" | "==>" | "+" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">="
+            "." | ".." | "&&" | "||" | "==>" | "+" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">="
                 | "=>" | "->" | ")" | "]" | "," | "=" | "+=" | "-=" | "*=" | "{"
         ),
         Tok::Kw(k) => matches!(*k, "else" | "requires" | "ensures" | "invariant" | "decreases" | "uses" | "where" | "is"),

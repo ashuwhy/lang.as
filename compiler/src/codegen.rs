@@ -2,7 +2,7 @@
 //! Every check the verifier proved disappears; every other check becomes a run-time check that
 //! stops the program with the source location instead of misbehaving.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{BinOp, UnOp};
 use crate::diag::{Source, Span};
@@ -13,7 +13,15 @@ const PRELUDE: &str = r#"#include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 typedef uint8_t as_unit;
+#if defined(__clang__)
+#define AS_ASSUME(c) __builtin_assume(c)
+#elif defined(__GNUC__) && __GNUC__ >= 13
+#define AS_ASSUME(c) __attribute__((assume(c)))
+#else
+#define AS_ASSUME(c) ((void)0)
+#endif
 __attribute__((noreturn, cold)) static void as_fail(const char *at, const char *what) {
   fflush(stdout);
   fprintf(stderr, "%s: run-time check failed: %s\n", at, what);
@@ -29,6 +37,42 @@ static void as_print_int(int64_t v) { printf("%lld", (long long)v); }
 static void as_print_bool(bool v) { fputs(v ? "true" : "false", stdout); }
 "#;
 
+/// Reference-counted array of one element type. `AS_ARR` and `AS_ELEM` are substituted.
+const ARRAY_RUNTIME: &str = r#"typedef struct { int64_t rc, len, cap; AS_ELEM data[]; } AS_ARR;
+static AS_ARR *AS_ARR_new(int64_t len, int64_t cap) {
+  if (cap < 4) cap = 4;
+  AS_ARR *a = malloc(sizeof(AS_ARR) + (size_t)cap * sizeof(AS_ELEM));
+  if (!a) as_fail("allocation", "out of memory");
+  a->rc = 1; a->len = len; a->cap = cap;
+  return a;
+}
+static inline AS_ARR *AS_ARR_inc(AS_ARR *a) { a->rc++; return a; }
+static inline void AS_ARR_dec(AS_ARR *a) { if (a && --a->rc == 0) free(a); }
+static AS_ARR *AS_ARR_copy(AS_ARR *a) {
+  AS_ARR *b = AS_ARR_new(a->len, a->len);
+  memcpy(b->data, a->data, (size_t)a->len * sizeof(AS_ELEM));
+  a->rc--;
+  return b;
+}
+static inline AS_ARR *AS_ARR_unique(AS_ARR *a) { return a->rc == 1 ? a : AS_ARR_copy(a); }
+static AS_ARR *AS_ARR_push(AS_ARR *a, AS_ELEM v) {
+  a = AS_ARR_unique(a);
+  if (a->len == a->cap) {
+    int64_t cap = a->cap * 2;
+    a = realloc(a, sizeof(AS_ARR) + (size_t)cap * sizeof(AS_ELEM));
+    if (!a) as_fail("allocation", "out of memory");
+    a->cap = cap;
+  }
+  a->data[a->len++] = v;
+  return a;
+}
+static AS_ARR *AS_ARR_repeat(AS_ELEM v, int64_t n) {
+  AS_ARR *a = AS_ARR_new(n, n);
+  for (int64_t i = 0; i < n; i++) a->data[i] = v;
+  return a;
+}
+"#;
+
 pub struct Codegen<'a> {
     m: &'a Module,
     src: &'a Source,
@@ -37,6 +81,13 @@ pub struct Codegen<'a> {
     tmp: usize,
     names: HashMap<LocalId, String>,
     cur: usize,
+    /// Array reads that are the variable's last use: move instead of sharing.
+    last: HashSet<crate::own::ReadSite>,
+    /// Array variables known to be uniquely owned here (writes need no copy check).
+    unique: HashSet<LocalId>,
+    /// Array variables and parameters of the current function, released on every exit.
+    arrays: Vec<LocalId>,
+    in_spec: bool,
 }
 
 fn cname(s: &str) -> String {
@@ -60,7 +111,7 @@ fn c_str(s: &str) -> String {
 }
 
 pub fn generate(m: &Module, src: &Source, verdicts: &HashMap<Site, Verdict>) -> String {
-    let mut g = Codegen { m, src, verdicts, out: String::new(), tmp: 0, names: HashMap::new(), cur: 0 };
+    let mut g = Codegen { m, src, verdicts, out: String::new(), tmp: 0, names: HashMap::new(), cur: 0, last: HashSet::new(), unique: HashSet::new(), arrays: vec![], in_spec: false };
     g.run();
     g.out
 }
@@ -72,8 +123,18 @@ impl<'a> Codegen<'a> {
             Ty::Bool => "bool".into(),
             Ty::Unit | Ty::Never => "as_unit".into(),
             Ty::Str => "const char *".into(),
+            t @ Ty::Array(_) => format!("{} *", mangle(self.m, &t)),
             t => mangle(self.m, &t),
         }
+    }
+
+    fn arr_name(&self, t: &Ty) -> String {
+        mangle(self.m, &self.m.erase(t))
+    }
+
+    /// Release every array this function still owns.
+    fn drops(&self) -> String {
+        self.arrays.iter().map(|id| format!("{}_dec({}); ", self.arr_name(&self.m.locals[*id as usize].ty), self.local(*id))).collect()
     }
 
     fn fresh(&mut self) -> String {
@@ -100,6 +161,10 @@ impl<'a> Codegen<'a> {
         for t in crate::verify::datatypes(self.m) {
             let name = mangle(self.m, &t);
             match self.m.erase(&t) {
+                Ty::Array(elem) => {
+                    let e = self.ty(&elem);
+                    self.out += &ARRAY_RUNTIME.replace("AS_ARR", &name).replace("AS_ELEM", &e);
+                }
                 Ty::Record(r) => {
                     let fields: Vec<String> = self.m.records[r].fields.iter().map(|(f, ft)| format!("{} f_{};", self.ty(ft), cname(f))).collect();
                     self.out += &format!("typedef struct {{ {} }} {name};\n", fields.join(" "));
@@ -122,6 +187,11 @@ impl<'a> Codegen<'a> {
         // Structural equality, used by run-time contract checks.
         for t in crate::verify::datatypes(self.m) {
             let name = mangle(self.m, &t);
+            if let Ty::Array(elem) = self.m.erase(&t) {
+                let el = self.eq(&elem, "a->data[i]", "b->data[i]");
+                self.out += &format!("static inline bool as_eq_{name}({name} *a, {name} *b) {{ if (a->len != b->len) return false; for (int64_t i = 0; i < a->len; i++) if (!({el})) return false; return true; }}\n");
+                continue;
+            }
             let body = match self.m.erase(&t) {
                 Ty::Record(r) => {
                     let parts: Vec<String> = self.m.records[r].fields.iter().map(|(f, ft)| self.eq(ft, &format!("a.f_{}", cname(f)), &format!("b.f_{}", cname(f)))).collect();
@@ -192,6 +262,10 @@ impl<'a> Codegen<'a> {
         }
         locals.sort();
         locals.dedup();
+        let verdicts = self.verdicts;
+        self.last = crate::own::last_uses(m, f, &|kind, span| matches!(verdicts.get(&Site { kind, span }), Some(Verdict::Proved)));
+        self.unique.clear();
+        self.arrays = f.params.iter().chain(locals.iter()).copied().filter(|id| matches!(m.peel(&m.locals[*id as usize].ty), Ty::Array(_))).collect();
         let mut s = format!("static {} as_fn_{}({}) {{\n", self.ty(&f.ret), cname(&f.name), self.params(fi));
         for id in locals {
             s += &format!("  {} {} = {{0}};\n", self.ty(&self.m.locals[id as usize].ty), self.local(id));
@@ -211,14 +285,15 @@ impl<'a> Codegen<'a> {
             TExprKind::Block(_, t) => t.span,
             _ => f.body.span,
         };
+        let drops = self.drops();
         if f.body.ty == Ty::Never {
             s += &format!("  (void)({body});\n  as_fail({}, \"unreachable\");\n}}\n", self.at(f.span));
         } else if f.ret == Ty::Unit {
             let checks = self.ensures_checks(tail_span, "0");
-            s += &format!("  (void)({body});\n{checks}  return 0;\n}}\n");
+            s += &format!("  (void)({body});\n{checks}  {drops}return 0;\n}}\n");
         } else {
             let checks = self.ensures_checks(tail_span, "_res");
-            s += &format!("  {} _res = {body};\n{checks}  return _res;\n}}\n", self.ty(&f.ret));
+            s += &format!("  {} _res = {body};\n{checks}  {drops}return _res;\n}}\n", self.ty(&f.ret));
         }
         self.out += &s;
     }
@@ -241,7 +316,28 @@ impl<'a> Codegen<'a> {
     /// Contract expressions checked at run time use 128-bit arithmetic, so they cannot overflow
     /// where the proof would have used mathematical integers.
     fn spec(&mut self, e: &TExpr) -> String {
+        let saved = self.in_spec;
+        self.in_spec = true;
+        let r = self.spec_inner(e);
+        self.in_spec = saved;
+        r
+    }
+
+    fn spec_inner(&mut self, e: &TExpr) -> String {
         match &e.kind {
+            TExprKind::Quant { forall, var, lo, hi, body } => {
+                let (l, h) = (self.spec(lo), self.spec(hi));
+                let v = self.local(*var);
+                let b = self.spec(body);
+                let ok = self.fresh();
+                if *forall {
+                    format!("({{ bool {ok} = 1; for (__int128 _q = {l}; {ok} && _q < {h}; _q++) {{ int64_t {v} = (int64_t)_q; {ok} = ({b}); }} {ok}; }})")
+                } else {
+                    format!("({{ bool {ok} = 0; for (__int128 _q = {l}; !{ok} && _q < {h}; _q++) {{ int64_t {v} = (int64_t)_q; {ok} = ({b}); }} {ok}; }})")
+                }
+            }
+            TExprKind::Index(a, i) => format!("(({})->data[(int64_t)({})])", self.spec(a), self.spec(i)),
+            TExprKind::Len(a) => format!("(({})->len)", self.spec(a)),
             TExprKind::Binary(op, l, r) => {
                 let (a, b) = (self.spec(l), self.spec(r));
                 match op {
@@ -303,7 +399,65 @@ impl<'a> Codegen<'a> {
             TExprKind::Bool(b) => b.to_string(),
             TExprKind::Str(s) => c_str(s),
             TExprKind::Unit => "((as_unit)0)".into(),
-            TExprKind::Local(id) => self.local(*id),
+            TExprKind::Local(id) => {
+                let name = self.local(*id);
+                if self.in_spec || !matches!(self.m.peel(&e.ty), Ty::Array(_)) {
+                    return name;
+                }
+                let an = self.arr_name(&e.ty);
+                if self.last.contains(&(e.span.lo, e.span.hi, *id)) {
+                    // Last use: hand the reference over instead of sharing it.
+                    format!("({{ {an} *_mv = {name}; {name} = NULL; _mv; }})")
+                } else {
+                    format!("{an}_inc({name})")
+                }
+            }
+            TExprKind::Index(a, i) => {
+                let iv = self.expr(i);
+                let an = self.arr_name(&a.ty);
+                let proved = self.proved(SiteKind::Bounds, e.span);
+                let (base, release) = self.borrow(a);
+                let t = self.fresh();
+                let access = if proved {
+                    format!("{base}->data[{t}]")
+                } else {
+                    format!("({{ if ((uint64_t){t} >= (uint64_t){base}->len) as_fail({}, \"index out of bounds\"); {base}->data[{t}]; }})", self.at(e.span))
+                };
+                match release {
+                    None => format!("({{ int64_t {t} = {iv}; {access}; }})"),
+                    Some(tmp) => {
+                        let r = self.fresh();
+                        format!("({{ {an} *{tmp} = {base_src}; int64_t {t} = {iv}; {} {r} = {access}; {an}_dec({tmp}); {r}; }})", self.ty(&e.ty), base_src = self.expr(a))
+                    }
+                }
+            }
+            TExprKind::Len(a) => {
+                let (base, release) = self.borrow(a);
+                match release {
+                    None => format!("({base}->len)"),
+                    Some(tmp) => {
+                        let an = self.arr_name(&a.ty);
+                        let src = self.expr(a);
+                        format!("({{ {an} *{tmp} = {src}; int64_t _n = {tmp}->len; {an}_dec({tmp}); _n; }})")
+                    }
+                }
+            }
+            TExprKind::ArrayLit(xs) => {
+                let an = self.arr_name(&e.ty);
+                let t = self.fresh();
+                let mut s = format!("({{ {an} *{t} = {an}_new({n}, {n}); ", n = xs.len());
+                for (i, x) in xs.iter().enumerate() {
+                    s += &format!("{t}->data[{i}] = {}; ", self.expr(x));
+                }
+                s + &format!("{t}; }})")
+            }
+            TExprKind::ArrayRepeat(v, n) => {
+                let an = self.arr_name(&e.ty);
+                let (vs, ns) = (self.expr(v), self.expr(n));
+                let check = if self.proved(SiteKind::Length, e.span) { String::new() } else { format!("if (_n < 0 || _n > INT64_C(1099511627776)) as_fail({}, \"invalid array length\"); ", self.at(e.span)) };
+                format!("({{ {} _v = {vs}; int64_t _n = {ns}; {check}{an}_repeat(_v, _n); }})", self.ty(&v.ty))
+            }
+            TExprKind::Quant { .. } => self.spec(e),
             TExprKind::Field(x, i) => {
                 let Ty::Record(r) = self.m.peel(&x.ty) else { unreachable!() };
                 format!("({}).f_{}", self.expr(x), cname(&self.m.records[r].fields[*i].0))
@@ -470,7 +624,7 @@ impl<'a> Codegen<'a> {
     fn assume(&mut self, e: &TExpr) -> String {
         let mut parts = vec![];
         self.simple_conjuncts(e, &mut parts);
-        parts.iter().map(|c| format!("if (!({c})) __builtin_unreachable();")).collect::<Vec<_>>().join(" ")
+        parts.iter().map(|c| format!("AS_ASSUME({c});")).collect::<Vec<_>>().join(" ")
     }
 
     fn assume_refinement(&mut self, a: usize, v: &str) -> String {
@@ -518,6 +672,16 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// Access an array without taking ownership. A variable is used directly; any other
+    /// expression is evaluated into a temporary that the caller releases.
+    fn borrow(&mut self, a: &TExpr) -> (String, Option<String>) {
+        if let TExprKind::Local(id) = a.kind {
+            return (self.local(id), None);
+        }
+        let t = self.fresh();
+        (t.clone(), Some(t))
+    }
+
     fn refine_check(&mut self, a: usize, v: &str) -> String {
         let def = self.m.aliases[a].clone();
         let mut parts = vec![];
@@ -533,32 +697,95 @@ impl<'a> Codegen<'a> {
 
     fn stmt(&mut self, s: &TStmt) -> String {
         match s {
-            TStmt::Let(id, e) | TStmt::Assign(id, e) => format!("{} = {}; ", self.local(*id), self.expr(e)),
-            TStmt::Expr(e) => format!("(void)({}); ", self.expr(e)),
+            TStmt::Let(id, e) | TStmt::Assign(id, e) => {
+                let v = self.expr(e);
+                let name = self.local(*id);
+                if matches!(self.m.peel(&e.ty), Ty::Array(_)) {
+                    // Take the new value first, then release the old one.
+                    let an = self.arr_name(&e.ty);
+                    self.unique.remove(id);
+                    format!("{{ {an} *_nv = {v}; {an}_dec({name}); {name} = _nv; }} ")
+                } else {
+                    format!("{name} = {v}; ")
+                }
+            }
+            TStmt::Expr(e) => {
+                if matches!(self.m.peel(&e.ty), Ty::Array(_)) {
+                    format!("{}_dec({}); ", self.arr_name(&e.ty), self.expr(e))
+                } else {
+                    format!("(void)({}); ", self.expr(e))
+                }
+            }
+            TStmt::IndexAssign(id, i, v, span) => {
+                let name = self.local(*id);
+                let an = self.arr_name(&self.m.locals[*id as usize].ty);
+                let elem = match self.m.peel(&self.m.locals[*id as usize].ty) {
+                    Ty::Array(t) => self.ty(&t),
+                    _ => unreachable!(),
+                };
+                let (is, vs) = (self.expr(i), self.expr(v));
+                let check = if self.proved(SiteKind::Bounds, *span) { String::new() } else { format!("if ((uint64_t)_i >= (uint64_t){name}->len) as_fail({}, \"index out of bounds\"); ", self.at(*span)) };
+                let make_unique = if self.unique.contains(id) { String::new() } else { format!("{name} = {an}_unique({name}); ") };
+                format!("{{ int64_t _i = {is}; {elem} _v = {vs}; {check}{make_unique}{name}->data[_i] = _v; }} ")
+            }
+            TStmt::Push(id, v, _) => {
+                let name = self.local(*id);
+                let an = self.arr_name(&self.m.locals[*id as usize].ty);
+                let elem = match self.m.peel(&self.m.locals[*id as usize].ty) {
+                    Ty::Array(t) => self.ty(&t),
+                    _ => unreachable!(),
+                };
+                let vs = self.expr(v);
+                format!("{{ {elem} _v = {vs}; {name} = {an}_push({name}, _v); }} ")
+            }
             TStmt::Return(e, span) => {
                 let m = self.m;
                 let f = &m.funcs[self.cur];
                 let v = self.expr(e);
+                let drops = self.drops();
                 if f.ret == Ty::Unit {
                     let checks = self.ensures_checks(*span, "0");
-                    format!("{{ (void)({v}); {checks} return 0; }} ")
+                    format!("{{ (void)({v}); {checks} {drops}return 0; }} ")
                 } else {
                     let checks = self.ensures_checks(*span, "_ret");
-                    format!("{{ {} _ret = {v}; {checks} return _ret; }} ", self.ty(&f.ret))
+                    format!("{{ {} _ret = {v}; {checks} {drops}return _ret; }} ", self.ty(&f.ret))
                 }
             }
-            TStmt::While { cond, invariants, decreases, body, span, .. } => {
-                let mut s = String::from("while (1) { ");
+            TStmt::While { cond, invariants, decreases, body, span, modified } => {
+                let mut copied = HashSet::new();
+                crate::own::copied_arrays(self.m, body, &mut copied);
+                crate::own::copied_arrays(self.m, cond, &mut copied);
+                let mut s = String::new();
+                let saved_unique = self.unique.clone();
+                for id in modified {
+                    if matches!(self.m.peel(&self.m.locals[*id as usize].ty), Ty::Array(_)) && !copied.contains(id) && !assigned_whole(body, *id) {
+                        // Nothing in the loop shares this array, so make it unique once, here.
+                        let name = self.local(*id);
+                        s += &format!("{name} = {}_unique({name}); ", self.arr_name(&self.m.locals[*id as usize].ty));
+                        self.unique.insert(*id);
+                    }
+                }
+                let mut head = String::new();
+                let mut checked = false;
                 for (i, inv) in invariants.iter().enumerate() {
                     if !(self.proved(SiteKind::InvEntry(i), *span) && self.proved(SiteKind::InvKeep(i), *span)) {
                         let c = self.spec(inv);
-                        s += &format!("if (!({c})) as_fail({}, \"loop invariant\"); ", self.at(*span));
-                    } else {
-                        s += &self.assume(inv);
-                        s.push(' ');
+                        head += &format!("if (!({c})) as_fail({}, \"loop invariant\"); ", self.at(*span));
+                        checked = true;
+                    } else if !mentions_any(inv, modified) {
+                        // Facts about values the loop changes would break the C compiler's
+                        // reduction and vectorisation patterns; pass on only the others.
+                        head += &self.assume(inv);
+                        head.push(' ');
                     }
                 }
-                s += &format!("if (!({})) break; ", self.expr(cond));
+                let c = self.expr(cond);
+                if checked {
+                    s += &format!("while (1) {{ {head}if (!({c})) break; ");
+                } else {
+                    // The canonical loop shape, so the C compiler can vectorise it.
+                    s += &format!("while ({c}) {{ {head}");
+                }
                 let dec = decreases.as_ref().filter(|_| !(self.proved(SiteKind::DecreasesBound, *span) && self.proved(SiteKind::Decreases, *span)));
                 let d0 = self.fresh();
                 if let Some(d) = dec {
@@ -570,6 +797,7 @@ impl<'a> Codegen<'a> {
                     let c = self.spec(d);
                     s += &format!("if (!(({c}) < {d0})) as_fail({}, \"loop measure did not decrease\"); ", self.at(*span));
                 }
+                self.unique = saved_unique;
                 s + "} "
             }
         }
@@ -596,7 +824,11 @@ fn collect_locals(e: &TExpr, out: &mut Vec<LocalId>) {
                         out.push(*id);
                         collect_locals(v, out);
                     }
-                    TStmt::Assign(_, v) | TStmt::Expr(v) | TStmt::Return(v, _) => collect_locals(v, out),
+                    TStmt::Assign(_, v) | TStmt::Expr(v) | TStmt::Return(v, _) | TStmt::Push(_, v, _) => collect_locals(v, out),
+                    TStmt::IndexAssign(_, i, v, _) => {
+                        collect_locals(i, out);
+                        collect_locals(v, out);
+                    }
                     TStmt::While { cond, body, invariants, decreases, .. } => {
                         collect_locals(cond, out);
                         collect_locals(body, out);
@@ -622,10 +854,17 @@ fn collect_locals(e: &TExpr, out: &mut Vec<LocalId>) {
             collect_locals(t, out);
             collect_locals(f, out);
         }
-        TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Coerce(x, _) => collect_locals(x, out),
-        TExprKind::Binary(_, a, b) => {
+        TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Coerce(x, _) | TExprKind::Len(x) => collect_locals(x, out),
+        TExprKind::Binary(_, a, b) | TExprKind::Index(a, b) | TExprKind::ArrayRepeat(a, b) => {
             collect_locals(a, out);
             collect_locals(b, out);
+        }
+        TExprKind::ArrayLit(xs) => xs.iter().for_each(|x| collect_locals(x, out)),
+        TExprKind::Quant { var, lo, hi, body, .. } => {
+            out.push(*var);
+            collect_locals(lo, out);
+            collect_locals(hi, out);
+            collect_locals(body, out);
         }
         TExprKind::Record(xs) | TExprKind::Ctor(_, xs) | TExprKind::Call(_, xs) | TExprKind::Print(xs) => xs.iter().for_each(|x| collect_locals(x, out)),
         TExprKind::Update(b, fs) => {
@@ -645,7 +884,11 @@ fn calls_in(e: &TExpr, out: &mut Vec<usize>) {
         TExprKind::Block(ss, t) => {
             for s in ss {
                 match s {
-                    TStmt::Let(_, v) | TStmt::Assign(_, v) | TStmt::Expr(v) | TStmt::Return(v, _) => calls_in(v, out),
+                    TStmt::Let(_, v) | TStmt::Assign(_, v) | TStmt::Expr(v) | TStmt::Return(v, _) | TStmt::Push(_, v, _) => calls_in(v, out),
+                    TStmt::IndexAssign(_, i, v, _) => {
+                        calls_in(i, out);
+                        calls_in(v, out);
+                    }
                     TStmt::While { cond, body, .. } => {
                         calls_in(cond, out);
                         calls_in(body, out);
@@ -659,16 +902,48 @@ fn calls_in(e: &TExpr, out: &mut Vec<usize>) {
             calls_in(s, out);
             arms.iter().for_each(|(_, b)| calls_in(b, out));
         }
-        TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Coerce(x, _) | TExprKind::Is(x, _) => calls_in(x, out),
-        TExprKind::Binary(_, a, b) => {
+        TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Coerce(x, _) | TExprKind::Is(x, _) | TExprKind::Len(x) => calls_in(x, out),
+        TExprKind::Binary(_, a, b) | TExprKind::Index(a, b) | TExprKind::ArrayRepeat(a, b) => {
             calls_in(a, out);
             calls_in(b, out);
         }
+        TExprKind::ArrayLit(xs) => xs.iter().for_each(|x| calls_in(x, out)),
         TExprKind::Record(xs) | TExprKind::Ctor(_, xs) | TExprKind::Print(xs) => xs.iter().for_each(|x| calls_in(x, out)),
         TExprKind::Update(b, fs) => {
             calls_in(b, out);
             fs.iter().for_each(|(_, x)| calls_in(x, out));
         }
         _ => {}
+    }
+}
+
+/// Does `e` replace the whole array `id` (so it may start sharing) rather than write into it?
+fn assigned_whole(e: &TExpr, id: LocalId) -> bool {
+    match &e.kind {
+        TExprKind::Block(ss, t) => {
+            ss.iter().any(|s| match s {
+                TStmt::Let(x, v) | TStmt::Assign(x, v) => *x == id || assigned_whole(v, id),
+                TStmt::Expr(v) | TStmt::Return(v, _) => assigned_whole(v, id),
+                TStmt::While { body, .. } => assigned_whole(body, id),
+                TStmt::IndexAssign(_, i, v, _) => assigned_whole(i, id) || assigned_whole(v, id),
+                TStmt::Push(_, v, _) => assigned_whole(v, id),
+            }) || assigned_whole(t, id)
+        }
+        TExprKind::If(c, t, f) => assigned_whole(c, id) || assigned_whole(t, id) || assigned_whole(f, id),
+        TExprKind::Match(s, arms) => assigned_whole(s, id) || arms.iter().any(|(_, b)| assigned_whole(b, id)),
+        _ => false,
+    }
+}
+
+fn mentions_any(e: &TExpr, ids: &[LocalId]) -> bool {
+    match &e.kind {
+        TExprKind::Local(id) => ids.contains(id),
+        TExprKind::Field(x, _) | TExprKind::Unary(_, x) | TExprKind::Coerce(x, _) | TExprKind::Len(x) | TExprKind::Is(x, _) => mentions_any(x, ids),
+        TExprKind::Binary(_, a, b) | TExprKind::Index(a, b) | TExprKind::ArrayRepeat(a, b) => mentions_any(a, ids) || mentions_any(b, ids),
+        TExprKind::Quant { lo, hi, body, .. } => mentions_any(lo, ids) || mentions_any(hi, ids) || mentions_any(body, ids),
+        TExprKind::If(c, t, f) => mentions_any(c, ids) || mentions_any(t, ids) || mentions_any(f, ids),
+        TExprKind::Record(xs) | TExprKind::Ctor(_, xs) | TExprKind::Call(_, xs) | TExprKind::Print(xs) | TExprKind::ArrayLit(xs) => xs.iter().any(|x| mentions_any(x, ids)),
+        TExprKind::Block(_, t) => mentions_any(t, ids),
+        _ => false,
     }
 }

@@ -51,29 +51,39 @@ Each line below is a test in `compiler/tests/cli.rs`.
 | A loop invariant that does not hold, a loop that may not end | `E0207`, `E0208` |
 | An agent weakens a pinned `ensures` to hide a bug | `E0301` contract WEAKER than the pinned one, with a result the new contract allows and the old one forbids |
 | A pinned function gains an effect | `E0303` |
+| `while j <= n` writing `composite[j]` in a sieve | `E0210` index may be out of bounds |
+| An unsorted array passed to a binary search that requires sorted input | `E0203`, at the call |
 
 ## Speed
 
-Three integer workloads written the same way in AS and Rust (`bench/perf/`, run with
-`python3 bench/perf/run.py`), median of five runs on this container's 4-core x86-64, GCC 13.3
-for AS, rustc 1.94:
+Array workloads written the same way in eight languages, each built with its usual release
+settings (full table, flags and caveats: [`bench/arrays/RESULTS.md`](bench/arrays/RESULTS.md)):
 
-| Benchmark | AS, every check proved | Rust `-O` (overflow wraps silently) | Rust `-O` with overflow checks |
-|---|---|---|---|
-| primes (trial division) | **639 ms** | 675 ms | 672 ms |
-| collatz (longest chain) | 848 ms | 570 ms | 847 ms |
-| isqrt (binary search) | 108 ms | 96 ms | 131 ms |
+| Workload | AS | C | Rust | Go | Java | JavaScript | Python |
+|---|---|---|---|---|---|---|---|
+| Sieve, n = 50M | **304 ms** | 308 | 316 | 315 | 358 | 446 | 11,749 |
+| Matrix multiply 400×400 | 52 ms | **50** | 53 | 113 | 157 | 173 | 5,667 |
+| Quicksort, 5M integers | **533 ms** | 556 | 567 | 579 | 667 | 1,138 | 13,958 |
+| Sum of 10M integers ×20 | 199 ms | 209 | **179** | 257 | 285 | 381 | 3,835 |
 
-AS is as safe as Rust with overflow checks and, on these programs, as fast or faster than it.
-Two things make that possible: proved checks are removed, and proved facts become optimiser
-input. In `primes`, the prover shows both operands of `n % d` fit in 32 bits, so AS emits 32-bit
-division, which is what beats Rust. `collatz` is slower than unchecked Rust because AS will not
-let `3 * x + 1` overflow silently, so the program carries two guards Rust omits; Rust with the
-same guards takes about 980 ms. These are three small programs, not a general claim.
+AS runs in the same band as C and Rust (noise here is about 5%) and 2-100 times faster than
+Go, Java, JavaScript and Python on these programs. The difference is what is known: in the AS
+programs every array index and every arithmetic operation is proved safe before compiling, so
+the binary has no bounds or overflow checks at all. C checks nothing; Rust checks bounds at run
+time and silently wraps on overflow in release builds.
+
+Three things make proved code fast rather than merely safe: proved checks are deleted, proved
+facts are handed to the C optimiser, and proved-safe divisions use cheaper 32-bit or unsigned
+instructions. On the integer benchmarks in `bench/perf/` that last one lets AS beat Rust on
+`primes` (665 ms against 673).
+
+The cost is source length: the AS programs state the contracts their proofs need, so they are
+longer than the Rust or Go versions (for example 611 tokens against 255 for matrix multiply).
+Inferring loop invariants automatically is the next step to close that gap.
 
 ## Built for models as well as people
 
-- **The whole language fits in 2,370 tokens.** [`llms.txt`](llms.txt) is the complete v0.1
+- **The whole language fits in 2,888 tokens.** [`llms.txt`](llms.txt) is the complete
   reference; a model that reads it can write AS.
 - **Short.** On four small programs with identical proved contracts, AS takes 230 tokens against
   Dafny's 249, Verus's 266 and Vera's 447 (`bench/tokens/`).
@@ -97,13 +107,16 @@ cargo build --release
 cargo test                                            # end-to-end tests
 ```
 
-## Status: v0.1
+## Status: v0.2 in progress
 
 Working: integers with proved overflow safety, booleans, records, enums, `Option`, `Result`,
-refinement types, functions, `let`/`var`, `if`/`match`/`while`, `requires`/`ensures`/
-`invariant`/`decreases`, effects, named arguments, the contract lock, and native binaries through
-C. Not yet: strings as values, arrays, generics, modules, a standard library beyond `io.print`,
-FFI, concurrency, and proof of termination for recursion. The plan, the evidence behind every
+refinement types, arrays with proved bounds (reference-counted, copy-on-write, moved on last
+use, so passing and returning arrays does not copy), `for` loops with automatic termination
+proofs, `forall`/`exists` in contracts, functions, `let`/`var`, `if`/`match`/`while`,
+`requires`/`ensures`/`invariant`/`decreases`, effects, named arguments, the contract lock, and
+native binaries through C. Not yet: strings as values, arrays inside other values, generics,
+modules, a standard library beyond `io.print`, FFI, concurrency, and proof of termination for
+recursion. The plan, the evidence behind every
 design rule, and the stop rules are in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Where this came from

@@ -16,6 +16,8 @@ use crate::tir::*;
 
 const MIN: &str = "(- 9223372036854775808)";
 const MAX: &str = "9223372036854775807";
+/// Largest array length the compiler admits (2^40 elements).
+pub const MAX_LEN: &str = "1099511627776";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SiteKind {
@@ -29,6 +31,8 @@ pub enum SiteKind {
     InvKeep(usize),
     DecreasesBound,
     Decreases,
+    Bounds,
+    Length,
     /// Optimisation facts, never errors: both operands of a division are non-negative and
     /// fit in 32 bits, or the dividend is non-negative and the divisor positive.
     FastDiv32,
@@ -116,6 +120,7 @@ pub fn mangle(m: &Module, t: &Ty) -> String {
         Ty::Enum(e) => format!("E_{}", m.enums[e].name),
         Ty::Option(x) => format!("Opt_{}", mangle(m, &x)),
         Ty::Result(a, b) => format!("Res_{}_{}", mangle(m, &a), mangle(m, &b)),
+        Ty::Array(x) => format!("Arr_{}", mangle(m, &x)),
         Ty::Alias(_) => unreachable!(),
     }
 }
@@ -126,6 +131,7 @@ pub fn ctors(m: &Module, t: &Ty) -> Vec<(String, Vec<String>)> {
     let name = mangle(m, &t);
     match &t {
         Ty::Record(r) => vec![(format!("mk_{name}"), m.records[*r].fields.iter().map(|(f, _)| format!("{name}__{f}")).collect())],
+        Ty::Array(_) => vec![(format!("mk_{name}"), vec![format!("{name}__data"), format!("{name}__len")])],
         _ => m.variants(&t).iter().map(|(v, fs)| (format!("{name}__{v}"), fs.iter().map(|(f, _)| format!("{name}__{v}__{f}")).collect())).collect(),
     }
 }
@@ -146,7 +152,7 @@ pub fn datatypes(m: &Module) -> Vec<Ty> {
                     }
                 }
             }
-            Ty::Option(x) => walk(m, x, seen, set),
+            Ty::Option(x) | Ty::Array(x) => walk(m, x, seen, set),
             Ty::Result(a, b) => {
                 walk(m, a, seen, set);
                 walk(m, b, seen, set);
@@ -180,6 +186,10 @@ pub fn preamble(m: &Module) -> String {
         let bodies: Vec<String> = dts
             .iter()
             .map(|t| {
+                if let Ty::Array(x) = m.erase(t) {
+                    let n = mangle(m, t);
+                    return format!("((mk_{n} ({n}__data (Array Int {})) ({n}__len Int)))", sort(m, &x));
+                }
                 let fields_of = |i: usize| -> Vec<Ty> {
                     match m.erase(t) {
                         Ty::Record(r) => m.records[r].fields.iter().map(|f| f.1.clone()).collect(),
@@ -259,6 +269,14 @@ impl<'a> Fv<'a> {
         self.events.push(Event::Check { site, pc: st.pc.clone(), goal, show, what, fix, notes: vec![] });
     }
 
+    fn fresh_array(&mut self, t: &Ty) -> String {
+        let Ty::Array(elem) = self.m.erase(t) else { unreachable!() };
+        let name = format!("arr_{}", self.fresh);
+        self.fresh += 1;
+        self.decls.push(format!("(declare-const {name} (Array Int {}))", sort(self.m, &elem)));
+        name
+    }
+
     /// Bounds on the integer parts of the parameters, used to ask for a readable counterexample.
     fn small(&self) -> String {
         fn leaves(m: &Module, t: &Ty, v: &str, depth: usize, out: &mut Vec<String>) {
@@ -306,6 +324,22 @@ impl<'a> Fv<'a> {
             Ty::Record(r) => {
                 let (_, sels) = ctors(m, t).remove(0);
                 m.records[*r].fields.iter().zip(sels).map(|((_, ft), s)| self.wf(&ft.clone(), &format!("({s} {v})"))).collect()
+            }
+            Ty::Array(elem) => {
+                let (_, sels) = ctors(m, t).remove(0);
+                let len = format!("({} {v})", sels[1]);
+                let mut p = vec![format!("(<= 0 {len})"), format!("(<= {len} {MAX_LEN})")];
+                // Plain integers are not constrained element by element; that only makes proofs
+                // harder, never unsound, and keeps quantifiers out of most queries.
+                if **elem != Ty::Int {
+                    let k = format!("qk_{}", self.fresh);
+                    self.fresh += 1;
+                    let ew = self.wf(&elem.clone(), &format!("(select ({} {v}) {k})", sels[0]));
+                    if ew != "true" {
+                        p.push(format!("(forall (({k} Int)) (=> (and (<= 0 {k}) (< {k} {len})) {ew}))"));
+                    }
+                }
+                p
             }
             Ty::Enum(_) | Ty::Option(_) | Ty::Result(..) => {
                 let cs = ctors(m, t);
@@ -593,6 +627,55 @@ impl<'a> Fv<'a> {
                 }
                 acc
             }
+            TExprKind::Index(a, i) => {
+                let (st, av) = self.expr(a, st);
+                let Some(st) = st else { return (None, "0".into()) };
+                let (st, iv) = self.expr(i, st);
+                let Some(st) = st else { return (None, "0".into()) };
+                let (_, sels) = ctors(m, &a.ty).remove(0);
+                let len = format!("({} {av})", sels[1]);
+                let it = self.text(i.span);
+                self.check(&st, Site { kind: SiteKind::Bounds, span: e.span }, format!("(and (<= 0 {iv}) (< {iv} {len}))"), format!("index `{it}` may be out of bounds for `{}`", self.text(a.span)), Some(format!("make sure `0 <= {it} && {it} < {}.len` holds here, e.g. with a loop invariant or a `requires`", self.text(a.span))), vec![("index".into(), iv.clone())]);
+                (Some(st), format!("(select ({} {av}) {iv})", sels[0]))
+            }
+            TExprKind::Len(a) => {
+                let (st, av) = self.expr(a, st);
+                let (_, sels) = ctors(m, &a.ty).remove(0);
+                (st, format!("({} {av})", sels[1]))
+            }
+            TExprKind::ArrayLit(xs) => {
+                let (st, vs) = self.exprs(xs, st);
+                let base = self.fresh_array(&e.ty);
+                let (c, _) = ctors(m, &e.ty).remove(0);
+                let mut data = base;
+                for (i, v) in vs.iter().enumerate() {
+                    data = format!("(store {data} {i} {v})");
+                }
+                (st, format!("({c} {data} {})", vs.len()))
+            }
+            TExprKind::ArrayRepeat(v, n) => {
+                let (st, vv) = self.expr(v, st);
+                let Some(st) = st else { return (None, "0".into()) };
+                let (st, nv) = self.expr(n, st);
+                let Some(st) = st else { return (None, "0".into()) };
+                let nt = self.text(n.span);
+                self.check(&st, Site { kind: SiteKind::Length, span: e.span }, format!("(and (<= 0 {nv}) (<= {nv} {MAX_LEN}))"), format!("the length `{nt}` may be negative or too large"), Some(format!("make sure `0 <= {nt}` holds here")), vec![]);
+                let Ty::Array(elem) = m.erase(&e.ty) else { unreachable!() };
+                let (c, _) = ctors(m, &e.ty).remove(0);
+                (Some(st), format!("({c} ((as const (Array Int {})) {vv}) {nv})", sort(m, &elem)))
+            }
+            TExprKind::Quant { forall, var, lo, hi, body } => {
+                let (_, lv) = self.expr(lo, st.clone());
+                let (_, hv) = self.expr(hi, st.clone());
+                let k = format!("q_{}", self.fresh);
+                self.fresh += 1;
+                let mut inner = st.clone();
+                inner.env.insert(*var, k.clone());
+                let (_, bv) = self.expr(body, inner);
+                let range = format!("(and (<= {lv} {k}) (< {k} {hv}))");
+                let t = if *forall { format!("(forall (({k} Int)) (=> {range} {bv}))") } else { format!("(exists (({k} Int)) (and {range} {bv}))") };
+                (Some(st), t)
+            }
             TExprKind::Block(stmts, tail) => {
                 let mut cur = st;
                 for s in stmts {
@@ -650,6 +733,31 @@ impl<'a> Fv<'a> {
                 Some(st)
             }
             TStmt::Expr(e) => self.expr(e, st).0,
+            TStmt::IndexAssign(id, i, v, span) => {
+                let (st, iv) = self.expr(i, st);
+                let (st, vv) = self.expr(v, st?);
+                let mut st = st?;
+                let ty = self.m.locals[*id as usize].ty.clone();
+                let (c, sels) = ctors(self.m, &ty).remove(0);
+                let a = st.env.get(id).cloned().unwrap_or_else(|| "0".into());
+                let len = format!("({} {a})", sels[1]);
+                let it = self.text(i.span);
+                let name = self.m.locals[*id as usize].name.clone();
+                self.check(&st, Site { kind: SiteKind::Bounds, span: *span }, format!("(and (<= 0 {iv}) (< {iv} {len}))"), format!("index `{it}` may be out of bounds for `{name}`"), Some(format!("make sure `0 <= {it} && {it} < {name}.len` holds here")), vec![("index".into(), iv.clone())]);
+                st.env.insert(*id, format!("({c} (store ({} {a}) {iv} {vv}) {len})", sels[0]));
+                Some(st)
+            }
+            TStmt::Push(id, v, span) => {
+                let (st, vv) = self.expr(v, st);
+                let mut st = st?;
+                let ty = self.m.locals[*id as usize].ty.clone();
+                let (c, sels) = ctors(self.m, &ty).remove(0);
+                let a = st.env.get(id).cloned().unwrap_or_else(|| "0".into());
+                let len = format!("({} {a})", sels[1]);
+                self.check(&st, Site { kind: SiteKind::Length, span: *span }, format!("(< {len} {MAX_LEN})"), "the array may already be at the maximum length".into(), None, vec![]);
+                st.env.insert(*id, format!("({c} (store ({} {a}) {len} {vv}) (+ {len} 1))", sels[0]));
+                Some(st)
+            }
             TStmt::Return(e, span) => {
                 let (st, v) = self.expr(e, st);
                 if let Some(st) = st {
@@ -664,9 +772,18 @@ impl<'a> Fv<'a> {
                     self.check(&st, Site { kind: SiteKind::InvEntry(i), span: *span }, g, format!("the loop invariant `{text}` may not hold when the loop starts"), Some("initialise the variables so it holds, or weaken the invariant".into()), vec![]);
                 }
                 let mut head = St { pc: st.pc.clone(), env: st.env.clone() };
+                let resized = resized_arrays(body);
                 for id in modified {
                     let l = &self.m.locals[*id as usize];
                     let (name, ty) = (l.name.clone(), l.ty.clone());
+                    if matches!(self.m.peel(&ty), Ty::Array(_)) && !resized.contains(id) {
+                        // Only elements are written in this loop, so the length is unchanged.
+                        let (c, sels) = ctors(self.m, &ty).remove(0);
+                        let old = head.env.get(id).cloned().unwrap_or_else(|| "0".into());
+                        let data = self.fresh_array(&ty);
+                        head.env.insert(*id, format!("({c} {data} ({} {old}))", sels[1]));
+                        continue;
+                    }
                     let v = self.fresh(&name, &ty);
                     let w = self.wf(&ty, &v);
                     head.env.insert(*id, v);
@@ -763,6 +880,8 @@ impl<'a> Fv<'a> {
                     let code = match site.kind {
                         SiteKind::Overflow | SiteKind::DivOverflow | SiteKind::FastDiv32 | SiteKind::FastDivUnsigned => "E0201",
                         SiteKind::DivZero => "E0202",
+                        SiteKind::Bounds => "E0210",
+                        SiteKind::Length => "E0211",
                         SiteKind::Requires(_) => "E0203",
                         SiteKind::Ensures(_) => "E0204",
                         SiteKind::Refine => "E0205",
@@ -897,10 +1016,51 @@ pub fn parse_sexps(s: &str) -> Vec<SExp> {
     out
 }
 
+/// Render an SMT array (`store` chains over a constant array) with its length as `[a, b, c]`.
+fn show_array(data: &SExp, len: &SExp, names: &HashMap<String, (Option<Vec<String>>, String)>) -> String {
+    fn go(e: &SExp, names: &HashMap<String, (Option<Vec<String>>, String)>) -> String {
+        pretty_inner(e, names)
+    }
+    let n: i64 = match len {
+        SExp::Atom(a) => a.parse().unwrap_or(0),
+        _ => 0,
+    };
+    let mut default = None;
+    let mut vals: HashMap<i64, String> = HashMap::new();
+    let mut cur = data.clone();
+    loop {
+        match &cur {
+            SExp::List(items) if matches!(items.first(), Some(SExp::Atom(s)) if s == "store") && items.len() == 4 => {
+                if let SExp::Atom(i) = &items[2] {
+                    if let Ok(i) = i.parse::<i64>() {
+                        vals.entry(i).or_insert_with(|| go(&items[3], names));
+                    }
+                }
+                cur = items[1].clone();
+            }
+            SExp::List(items) if items.len() == 2 && matches!(&items[0], SExp::List(h) if matches!(h.get(1), Some(SExp::Atom(s)) if s == "const")) => {
+                default = Some(go(&items[1], names));
+                break;
+            }
+            _ => break,
+        }
+    }
+    if n > 12 {
+        let shown: Vec<String> = (0..8).map(|i| vals.get(&i).cloned().or(default.clone()).unwrap_or_else(|| "?".into())).collect();
+        return format!("[{}, ... ({n} elements)]", shown.join(", "));
+    }
+    let shown: Vec<String> = (0..n.max(0)).map(|i| vals.get(&i).cloned().or(default.clone()).unwrap_or_else(|| "?".into())).collect();
+    format!("[{}]", shown.join(", "))
+}
+
 /// Render a model value in AS syntax.
 fn pretty(m: &Module, e: &SExp) -> String {
     let mut names: HashMap<String, (Option<Vec<String>>, String)> = HashMap::new();
     for t in datatypes(m) {
+        if matches!(m.erase(&t), Ty::Array(_)) {
+            names.insert(ctors(m, &t).remove(0).0, (None, "[]".into()));
+            continue;
+        }
         let is_record = matches!(m.erase(&t), Ty::Record(_));
         let fields: Vec<String> = match m.erase(&t) {
             Ty::Record(r) => m.records[r].fields.iter().map(|f| f.0.clone()).collect(),
@@ -911,7 +1071,12 @@ fn pretty(m: &Module, e: &SExp) -> String {
             names.insert(c, (if is_record { Some(fields.clone()) } else { None }, vname));
         }
     }
-    fn go(e: &SExp, names: &HashMap<String, (Option<Vec<String>>, String)>) -> String {
+    return pretty_inner(e, &names);
+}
+
+fn pretty_inner(e: &SExp, names: &HashMap<String, (Option<Vec<String>>, String)>) -> String {
+    let go = pretty_inner;
+    {
         match e {
             SExp::Atom(a) => names.get(a).map(|(_, v)| v.clone()).unwrap_or_else(|| a.clone()),
             SExp::List(items) => {
@@ -921,6 +1086,9 @@ fn pretty(m: &Module, e: &SExp) -> String {
                     }
                 }
                 if let Some(SExp::Atom(head)) = items.first() {
+                    if names.get(head).is_some_and(|(_, v)| v == "[]") && items.len() == 3 {
+                        return show_array(&items[1], &items[2], names);
+                    }
                     if let Some((fields, vname)) = names.get(head) {
                         let args: Vec<String> = items[1..].iter().map(|x| go(x, names)).collect();
                         return match fields {
@@ -933,7 +1101,6 @@ fn pretty(m: &Module, e: &SExp) -> String {
             }
         }
     }
-    go(e, &names)
 }
 
 /// Does the current contract of `f` refine a pinned one? Returns verdicts for
@@ -995,4 +1162,46 @@ pub fn check_refinement(m: &Module, src: &Source, f: &Func, old_req: &[TExpr], o
     names.push("result".into());
     let post = verdict(ans.get(4), pick(4), &names);
     Some((pre, post))
+}
+
+/// Arrays that a loop body pushes to or replaces (as opposed to writing elements in place).
+fn resized_arrays(e: &TExpr) -> HashSet<LocalId> {
+    fn go(e: &TExpr, out: &mut HashSet<LocalId>) {
+        match &e.kind {
+            TExprKind::Block(ss, t) => {
+                for s in ss {
+                    match s {
+                        TStmt::Let(id, v) | TStmt::Assign(id, v) => {
+                            out.insert(*id);
+                            go(v, out);
+                        }
+                        TStmt::Push(id, v, _) => {
+                            out.insert(*id);
+                            go(v, out);
+                        }
+                        TStmt::Expr(v) | TStmt::Return(v, _) => go(v, out),
+                        TStmt::IndexAssign(_, i, v, _) => {
+                            go(i, out);
+                            go(v, out);
+                        }
+                        TStmt::While { body, .. } => go(body, out),
+                    }
+                }
+                go(t, out);
+            }
+            TExprKind::If(c, t, f) => {
+                go(c, out);
+                go(t, out);
+                go(f, out);
+            }
+            TExprKind::Match(s, arms) => {
+                go(s, out);
+                arms.iter().for_each(|(_, b)| go(b, out));
+            }
+            _ => {}
+        }
+    }
+    let mut out = HashSet::new();
+    go(e, &mut out);
+    out
 }

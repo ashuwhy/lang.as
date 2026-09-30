@@ -1,8 +1,8 @@
-# AS language reference (v0.1)
+# AS language reference (v0.2)
 
 > AS is a compiled, memory-safe language. Functions carry contracts that an SMT solver proves
 > at compile time; proved checks cost nothing at run time. This file is the complete reference
-> for what the v0.1 compiler accepts. Read it before writing AS.
+> for what the current compiler accepts. Read it before writing AS.
 
 ## Workflow
 
@@ -21,8 +21,8 @@
   bracket, or the next line starts with an operator, `.`, `)`, `else`, or a contract keyword.
 - Comments: `// line` and `/* block */`. Braces delimit blocks; indentation is not significant.
 - Integer literals: `42`, `1_000_000`, `0xff`. Strings: `"text\n"` (only as `io.print` arguments in v0.1).
-- Keywords: fn pub type enum let var if else match while return requires ensures invariant
-  decreases uses where true false is.
+- Keywords: fn pub type enum let var if else match while for in return requires ensures
+  invariant decreases uses where true false is forall exists.
 
 ## Types
 
@@ -32,6 +32,7 @@
 | `nat` | `int where it >= 0` |
 | `bool` | `true`, `false` |
 | `T?` | `Option<T>`: `Some(x)` or `None` |
+| `[T]` | array of `T` (value semantics: assignment copies, but only when the copy is later written) |
 | `Result<T, E>` | `Ok(x)` or `Err(e)` |
 | `type Name = { f: T, g: U }` | a record type (must be named) |
 | `type Name = T where <pred>` | a refinement: `T` values for which `pred` holds; `it` is the value |
@@ -90,6 +91,18 @@ while i < n
 {
   i += 1
 }
+
+for i in 0..a.len                      // i runs lo..hi-1; bounds and termination are automatic
+  invariant 0 <= s                     // add only what the rest of the code needs
+{
+  s += a[i]
+}
+
+let a = [1, 2, 3]                      // array literal
+var b = [0; n]                         // n copies of 0
+b[i] = 5                               // also b[i] += 1; needs `var`
+b.push(7)                              // append; needs `var`
+a.len                                  // length
 ```
 
 - Operators: `+ - * / %` (ints; `/` and `%` truncate toward zero), `== != < <= > >=`,
@@ -99,12 +112,16 @@ while i < n
 - Patterns: `_`, a name, a literal, `Variant`, `Variant(p1, p2)`, `Some(p)`, `None`, `Ok(p)`, `Err(p)`.
 - A `Result` value may not be silently dropped; handle it with `match`.
 - In code, `==` compares ints and bools. Contracts may compare any values.
+- Arrays may be variables, parameters and return values, but not stored inside records, enums,
+  options or other arrays (v0.2). Passing an array and returning it (`a = f(a)`) does not copy.
 
 ## Contracts and proofs
 
 - Contract expressions (`requires`, `ensures`, `invariant`, `decreases`, `where`) use
   mathematical integers, so `a + b <= int.max` means what it says. They may not call functions
-  or perform effects in v0.1.
+  or perform effects. They may use `forall i in lo..hi: P` and `exists i in lo..hi: P`.
+- Every `a[i]` must be proved in bounds (E0210). `for i in 0..a.len` proves it for you. After a
+  loop that only writes elements (no `push`), the array's length is still known.
 - Code arithmetic is 64-bit: every `+ - *` must be proved not to overflow, every `/ %` to have a
   non-zero divisor. Bound inputs with `requires` or refinement types to make this provable.
 - Calls are checked modularly: the callee's `requires` must hold at the call; afterwards only its
@@ -137,6 +154,25 @@ pub fn transfer(from: Account, to: Account, amount: Cents) -> Result<Moved, Tran
        to:   { ...to,   balance: to.balance + amount } })
 }
 
+pub fn search(a: [int], key: int) -> int
+  requires forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j]
+  ensures result == -1 || (0 <= result && result < a.len && a[result] == key)
+  ensures result == -1 ==> forall i in 0..a.len: a[i] != key
+{
+  var lo = 0
+  var hi = a.len
+  while lo < hi
+    invariant 0 <= lo && lo <= hi && hi <= a.len
+    invariant forall i in 0..lo: a[i] < key
+    invariant forall i in hi..a.len: a[i] > key
+    decreases hi - lo
+  {
+    let mid = lo + (hi - lo) / 2
+    if a[mid] < key { lo = mid + 1 } else if a[mid] > key { hi = mid } else { return mid }
+  }
+  -1
+}
+
 pub fn isqrt(n: int) -> int
   requires 0 <= n && n <= 1_000_000_000_000
   ensures result * result <= n && n < (result + 1) * (result + 1)
@@ -161,15 +197,15 @@ fn main() uses io {
     Ok(m) => io.print("moved, new balance:", m.to.balance)
     Err(e) => io.print("transfer failed")
   }
-  io.print(isqrt(99))
+  io.print(isqrt(99), search([1, 3, 5, 7], 5))
 }
 ```
 
-## Not in v0.1
+## Not yet in the language
 
-Strings as values, arrays, maps, recursive types, generics, modules, `for` loops, `?`,
+Strings as values, maps, arrays inside other values, recursive types, generics, modules, `?`,
 closures, sized integers, floats, the standard library beyond `io.print`, and FFI. Do not write
-them; the compiler will reject them. They are planned for v0.2 and v0.3 (see `docs/DESIGN.md`).
+them; the compiler will reject them. They are planned (see `docs/DESIGN.md`).
 
 ## Diagnostic codes
 
@@ -177,6 +213,6 @@ E0001 lexing, E0002 syntax, E0101 unknown name, E0102 type mismatch, E0103 field
 non-exhaustive match, E0105 cannot infer type, E0106 effect not declared, E0107 argument count,
 E0108 not allowed in contract, E0109 duplicate, E0110 recursive type, E0111 not `var`, E0112
 unnamed record type, E0113 bad main, E0114 ignored Result, E0115 literal range, E0116 comparison,
-E0117 argument label, E0201 overflow, E0202 division by zero, E0203 callee precondition, E0204
+E0117 argument label, E0118 array inside a value, E0201 overflow, E0202 division by zero, E0203 callee precondition, E0204
 postcondition, E0205 refinement, E0206/E0207 loop invariant, E0208 loop measure, E0209 vacuous
-precondition, E0301-E0305 contract lock, W0250 kept at run time, W0251 no solver.
+precondition, E0210 index out of bounds, E0211 array length, E0301-E0305 contract lock, W0250 kept at run time, W0251 no solver.
