@@ -14,6 +14,7 @@ usage:
   aslang lock <file.as>             pin the public contracts in aslang.lock
   aslang emit-c <file.as>           print the generated C
   aslang emit-smt <file.as>         print the SMT-LIB queries
+  aslang explain <code>             explain a diagnostic, e.g. `aslang explain E0201`
 
 options:
   --json          machine-readable output
@@ -192,6 +193,16 @@ fn build(a: &Args, o: &Outcome, out: &Path) -> Result<(), String> {
 fn main() {
     let a = parse_args();
     match a.cmd.as_str() {
+        "explain" => match aslang::explain::explain(&a.file) {
+            Some(t) => print!("{t}"),
+            None => {
+                eprintln!("no such code `{}`; codes are:", a.file);
+                for e in aslang::explain::ENTRIES {
+                    eprintln!("  {}  {}", e.code, e.title);
+                }
+                exit(2)
+            }
+        },
         "check" => {
             let o = analyse(&a, true);
             exit(if report(&a, &o, json!(null)) { 0 } else { 1 })

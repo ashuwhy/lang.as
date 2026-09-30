@@ -7,3 +7,4 @@ pub mod tir;
 pub mod verify;
 pub mod codegen;
 pub mod lock;
+pub mod explain;

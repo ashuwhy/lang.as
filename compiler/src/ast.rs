@@ -154,6 +154,8 @@ pub enum ExprKind {
     If(Box<Expr>, Block, Option<Box<Expr>>),
     Match(Box<Expr>, Vec<Arm>),
     Block(Block),
+    /// `name: value` inside a call's argument list.
+    Named(String, Box<Expr>),
 }
 
 #[derive(Clone, Debug)]

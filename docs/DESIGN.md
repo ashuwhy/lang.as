@@ -92,6 +92,28 @@ cannot quietly weaken it.** It is designed to be the cheapest language in which 
     The solver interface is plain SMT-LIB text (Z3 today, cvc5 or a successor tomorrow), and the
     core calculus is small enough to mechanise in Lean.
 
+## What a model needs from a language
+
+What makes code easier for a model to write correctly, as far as can be judged without
+measurement; each point is meant to be tested in the v0.2 evaluation.
+
+1. **Everything about a function in its signature.** Types, effects and contracts, so a
+   function can be understood and changed without reading other files. Hidden state, implicit
+   conversions, macros and overloading force a model to hold context it may not have.
+2. **A definite finish line.** The most wasteful habit is re-deriving code that already works.
+   "All N checks proved" ends the loop; a green test suite does not, because tests can be wrong.
+3. **Swaps caught, not merely unlikely.** Passing `(to, from)` for `(from, to)` is one of the
+   most common slips. Labels checked against parameter names (`transfer(from: a, to: b)`) turn
+   it into a compile error with the corrected call as the fix. Vera's answer, removing names,
+   makes the code unreadable for the human who must approve it.
+4. **Errors that say what to do.** A stable code, the exact span, a fix and a counterexample
+   are cheaper than a paragraph of prose; `aslang explain` gives the rest on demand.
+5. **Edit-robust syntax.** Models edit by replacing exact text. One statement per line, no
+   significant indentation, trailing commas allowed and no required semicolons keep edits
+   local and diffs small.
+6. **An API that cannot be hallucinated.** The whole language and standard library listed in
+   one short document, with "did you mean" suggestions for every unknown name.
+
 ## The language in one example
 
 ```as
@@ -118,7 +140,7 @@ pub fn transfer(from: Account, to: Account, amount: Cents) -> Result<Moved, Tran
 fn main() uses io {
   let a = { id: 1, balance: 100, frozen: false }
   let b = { id: 2, balance: 0, frozen: false }
-  match transfer(a, b, 30) {
+  match transfer(from: a, to: b, amount: 30) {
     Ok(m) => io.print(m.to.balance)
     Err(e) => io.print(-1)
   }
@@ -178,7 +200,10 @@ from the same checked IR.
 | Effects (`uses`), `io.print` for `int`, `bool` and string literals | yes |
 | C backend to a native binary | yes |
 | Contract lock with refinement check and vacuity guard | yes |
-| Diagnostics as instructions, in text and JSON | yes |
+| Diagnostics as instructions, in text and JSON; `aslang explain` | yes |
+| Named arguments checked against parameter names | yes |
+| Proved facts passed to the C optimiser; proved-safe 32-bit and unsigned division | yes |
+| `llms.txt`: the complete v0.1 reference (2,370 tokens) | yes |
 | Strings, arrays, maps, recursive enums (Perceus RC), `for` loops | v0.2 |
 | Generics, modules, `?`, sized integers, recursion termination | v0.2 |
 | C ABI export (`.h` + static library) and import through `uses ffi` | v0.2 |

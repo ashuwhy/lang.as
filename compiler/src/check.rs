@@ -826,6 +826,7 @@ impl<'a> Checker<'a> {
                 texpr(TExprKind::Match(Box::new(s), tarms), ty, sp)
             }
             ExprKind::Block(b) => self.check_block(b, expected)?,
+            ExprKind::Named(l, _) => return Err(Diagnostic::error("E0117", sp, format!("`{l}: ...` labels are only allowed in call arguments"))),
         })
     }
 
@@ -933,6 +934,8 @@ impl<'a> Checker<'a> {
             let d = Diagnostic::error("E0107", sp, format!("`{name}` takes {} value(s), found {}", fields.len(), args.len()));
             return Err(if fields.is_empty() { d.with_fix(format!("write `{name}` without parentheses")) } else { d });
         }
+        let names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+        let args = self.unlabel(args, &names, name)?;
         let mut targs = vec![];
         for (a, (_, ft)) in args.iter().zip(fields) {
             targs.push(self.check_expr(a, Some(&ft))?);
@@ -986,11 +989,37 @@ impl<'a> Checker<'a> {
         for u in &uses {
             self.need_effect(u, callee.span).map_err(|d| d.with_note(format!("`{name}` uses `{u}`")))?;
         }
+        let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+        let args = self.unlabel(args, &names, name)?;
         let mut targs = vec![];
         for (a, (_, pt)) in args.iter().zip(params) {
             targs.push(self.check_expr(a, Some(&pt))?);
         }
         Ok(texpr(TExprKind::Call(fi, targs), ret, sp))
+    }
+
+    /// Check `name: value` labels against the parameter names, in order. Labels are optional;
+    /// when given they must match, which turns swapped arguments into a compile error.
+    fn unlabel(&self, args: &[Expr], names: &[String], callee: &str) -> CResult<Vec<Expr>> {
+        let labels: Vec<Option<&String>> = args.iter().map(|a| if let ExprKind::Named(l, _) = &a.kind { Some(l) } else { None }).collect();
+        for (i, a) in args.iter().enumerate() {
+            let Some(l) = labels[i] else { continue };
+            if names.get(i) == Some(l) {
+                continue;
+            }
+            let mut d = Diagnostic::error("E0117", a.span, format!("argument {} of `{callee}` is `{}`, but it is labelled `{l}`", i + 1, names.get(i).map(String::as_str).unwrap_or("?")));
+            // If every argument is labelled and they are only out of order, show the fixed call.
+            if labels.iter().all(|l| l.is_some()) && args.len() == names.len() {
+                let fixed: Vec<String> = names.iter().filter_map(|n| labels.iter().position(|l| *l == Some(n)).map(|j| self.src.slice(args[j].span).to_string())).collect();
+                if fixed.len() == names.len() {
+                    d = d.with_fix(format!("{callee}({})", fixed.join(", ")));
+                }
+            } else {
+                d = d.with_note(format!("the parameters are ({})", names.join(", ")));
+            }
+            return Err(d);
+        }
+        Ok(args.iter().map(|a| if let ExprKind::Named(_, e) = &a.kind { (**e).clone() } else { a.clone() }).collect())
     }
 
     fn need_effect(&self, eff: &str, sp: Span) -> CResult<()> {

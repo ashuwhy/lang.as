@@ -22,7 +22,7 @@ pub fn transfer(from: Account, to: Account, amount: Cents) -> Result<Moved, Tran
 fn main() uses io {
   let a = { id: 1, balance: 100, frozen: false }
   let b = { id: 2, balance: 0, frozen: false }
-  match transfer(a, b, 30) {
+  match transfer(from: a, to: b, amount: 30) {
     Ok(m) => io.print("moved, new balance:", m.to.balance)
     Err(e) => io.print("transfer failed")
   }

@@ -52,13 +52,14 @@ fn seeded_bugs_are_rejected() {
     let isqrt = example("examples/isqrt.as");
     expect_error("off_by_one", &ledger.replace("balance: to.balance + amount }", "balance: to.balance + amount - 1 }"), "E0204");
     expect_error("missing_bound", &ledger.replace("  requires to.balance + amount <= 1_000_000_000_000\n", ""), "E0205");
-    expect_error("same_account", &ledger.replace("transfer(a, b, 30)", "transfer(a, a, 30)"), "E0203");
+    expect_error("same_account", &ledger.replace("transfer(from: a, to: b, amount: 30)", "transfer(from: a, to: a, amount: 30)"), "E0203");
     expect_error("vacuous", &ledger.replace("requires from.id != to.id", "requires from.id != to.id && from.id == to.id"), "E0209");
     expect_error("bad_invariant", &sum.replace("invariant 2 * total == i * (i + 1)", "invariant 2 * total == i * i"), "E0207");
     expect_error("bad_measure", &sum.replace("decreases n - i", "decreases i"), "E0208");
     expect_error("bad_search", &isqrt.replace("if mid * mid <= n", "if mid * mid < n"), "E0207");
     expect_error("midpoint", &example("examples/bugs/midpoint.as"), "E0201");
     expect_error("effects", &example("examples/bugs/effects.as"), "E0106");
+    expect_error("swapped_args", &ledger.replace("transfer(from: a, to: b, amount: 30)", "transfer(to: b, from: a, amount: 30)"), "E0117");
     expect_error("nat_underflow", "pub fn g(x: nat) -> nat {\n  x - 1\n}\n", "E0205");
 }
 
@@ -103,4 +104,14 @@ fn json_output() {
     assert_eq!(d["code"], "E0201");
     assert!(d["fix"].is_string());
     assert!(!d["counterexample"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn explain_knows_every_code_it_emits() {
+    let codes = ["E0101", "E0104", "E0106", "E0117", "E0201", "E0204", "E0209", "E0301", "E0303", "W0250"];
+    for c in codes {
+        let (status, out, _) = aslang(&["explain", c], &root());
+        assert_eq!(status, 0, "{c}");
+        assert!(out.starts_with(c), "{out}");
+    }
 }

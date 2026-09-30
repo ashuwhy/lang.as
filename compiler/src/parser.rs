@@ -424,7 +424,15 @@ impl Parser {
             if self.eat_p(close) {
                 break;
             }
-            v.push(self.expr()?);
+            if let (Tok::Ident(label), Tok::P(":")) = (self.peek().clone(), self.peek_at(1).clone()) {
+                let start = self.span();
+                self.bump();
+                self.bump();
+                let e = self.expr()?;
+                v.push(Expr { span: start.to(e.span), kind: ExprKind::Named(label, Box::new(e)) });
+            } else {
+                v.push(self.expr()?);
+            }
             self.skip_semis();
             if !self.eat_p(",") {
                 self.skip_semis();

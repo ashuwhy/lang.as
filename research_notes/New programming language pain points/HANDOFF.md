@@ -13,6 +13,38 @@ sealed boundaries, no escape hatches); the first backend is native code via C. T
 `docs/DESIGN.md`; the compiler lives in `compiler/`. Phase 0's four-arm study is replaced by an
 evaluation of the language itself at v0.2. Do not reopen this decision without new evidence.
 
+## State at the end of the 2026-09-30 session
+
+Done, all on `research/language-pain-points`:
+
+- `phase0/`: network check and the hands-on LemmaScript assessment with reproducible probes.
+- `research_notes/.../why_llm_languages_flopped.md` and `bench/tokens/`: why Vera, Nanolang
+  and the other LLM-first languages have no users, and token measurements (Rosetta Code across
+  20 languages; a four-program corpus with identical contracts).
+- `docs/DESIGN.md`: the design, ten rules, v0.1 scope, roadmap with exit tests and stop rules.
+- `compiler/`: the v0.1 compiler (Rust). Lexer, parser, type and effect checker, typed IR,
+  Z3 verifier (overflow, division, refinements, contracts, loop invariants and measures,
+  counterexamples), C backend (proved checks removed, proved facts passed to the optimiser,
+  32-bit and unsigned division where proved), contract lock (`aslang lock`, refinement check
+  between versions, effect growth, type changes, vacuous `requires`), named arguments,
+  `aslang explain`, JSON output. `cargo test` runs the end-to-end suite.
+- `llms.txt`: the complete v0.1 reference (2,370 tokens). `README.md`: rewritten; every claim
+  is backed by a test or a benchmark in the repo. The 2021 prototype is in `legacy/`.
+- `bench/perf/`: AS against Rust. On this container AS beat Rust on `primes`, tied checked
+  Rust on `collatz`, and was within about 12% of unchecked Rust on `isqrt`.
+
+Next, in order:
+
+1. v0.2 heap values: strings, arrays (with proved bounds checks), recursive enums, using
+   Perceus-style reference counting with in-place reuse. Arrays unlock most real benchmarks.
+2. Generics, modules, `?`, `for` loops, sized integers, termination of recursion.
+3. More proof-driven optimisation: bounds-check elimination, `restrict` from value semantics,
+   narrowing of proved-small integers; add array-heavy benchmarks against Rust and C.
+4. The v0.2 agent evaluation described in `docs/DESIGN.md` (AS vs Rust vs TypeScript on
+   bug-prone tasks; escaped defects and total agent tokens).
+5. Consider filing the LemmaScript vacuity issue drafted at the end of
+   `phase0/lemmascript_assessment.md` (owner's decision).
+
 ## The request
 
 Find the single biggest real pain point in software development today (September 2026)
