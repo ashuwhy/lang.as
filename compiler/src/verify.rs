@@ -826,6 +826,40 @@ impl<'a> Fv<'a> {
         }
     }
 
+    /// After branches join, give long path conditions and values a name of their own. Each join
+    /// repeats the terms of both branches, so without names a run of `if`s or `match`es grows
+    /// exponentially; a named term is defined once, and every later use is short.
+    fn settle(&mut self, r: (Option<St>, String), ty: &Ty) -> (Option<St>, String) {
+        const LONG: usize = 400;
+        let (st, v) = r;
+        let Some(mut st) = st else { return (None, v) };
+        let top = St { pc: "true".into(), env: HashMap::new() };
+        if st.pc.len() > LONG {
+            let n = self.fresh("pc", &Ty::Bool);
+            self.fact(&top, format!("(= {n} {})", st.pc));
+            st.pc = n;
+        }
+        let mut ids: Vec<LocalId> = st.env.iter().filter(|(_, t)| t.len() > LONG).map(|(id, _)| *id).collect();
+        ids.sort();
+        for id in ids {
+            if id == crate::infer::QUANT_VAR {
+                continue;
+            }
+            let lty = self.m.locals[id as usize].ty.clone();
+            let n = self.fresh(&format!("j{}", id), &lty);
+            self.fact(&top, format!("(= {n} {})", st.env[&id]));
+            st.env.insert(id, n);
+        }
+        let v = if v.len() > LONG && !self.spec {
+            let n = self.fresh("jv", ty);
+            self.fact(&top, format!("(= {n} {v})"));
+            n
+        } else {
+            v
+        };
+        (Some(st), v)
+    }
+
     fn fresh(&mut self, base: &str, t: &Ty) -> String {
         let name = format!("{}_{}", base.replace(|c: char| !c.is_ascii_alphanumeric(), "_"), self.fresh);
         self.fresh += 1;
@@ -1233,7 +1267,8 @@ impl<'a> Fv<'a> {
                 let fs = St { pc: and(vec![st.pc.clone(), format!("(not {cv})")]), env: st.env.clone() };
                 let (a, av) = self.expr(t, ts);
                 let (b, bv) = self.expr(f, fs);
-                merge(&st, &cv, a, av, b, bv)
+                let r = merge(&st, &cv, a, av, b, bv);
+                self.settle(r, &e.ty)
             }
             TExprKind::Match(s, arms) => {
                 let (st, sv) = self.expr(s, st);
@@ -1253,7 +1288,7 @@ impl<'a> Fv<'a> {
                     let (prev, pv) = acc;
                     acc = if prev.is_none() { (o, v) } else { merge(&st, &test, o, v, prev, pv) };
                 }
-                acc
+                self.settle(acc, &e.ty)
             }
             TExprKind::Index(a, i) => {
                 let (st, av) = self.expr(a, st);
@@ -1264,7 +1299,16 @@ impl<'a> Fv<'a> {
                 let len = format!("({} {av})", sels[1]);
                 let it = self.text(i.span);
                 self.check(&st, Site { kind: SiteKind::Bounds, span: e.span }, format!("(and (<= 0 {iv}) (< {iv} {len}))"), format!("index `{it}` may be out of bounds for `{}`", self.text(a.span)), Some(format!("make sure `0 <= {it} && {it} < {}.len` holds here, e.g. with a loop invariant or a `requires`", self.text(a.span))), vec![("index".into(), iv.clone())]);
-                (Some(st), format!("(select ({} {av}) {iv})", sels[0]))
+                let v = format!("(select ({} {av}) {iv})", sels[0]);
+                // Arrays are not constrained element by element (that would need quantifiers), so
+                // each element read is known to be a well-formed value of its type instead.
+                if !self.spec {
+                    if let Ty::Array(elem) = m.erase(&a.ty) {
+                        let w = self.wf(&elem, &v);
+                        self.fact(&st, w);
+                    }
+                }
+                (Some(st), v)
             }
             TExprKind::Len(a) => {
                 let (st, av) = self.expr(a, st);

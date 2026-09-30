@@ -240,3 +240,25 @@ fn lock_points_out_open_contracts() {
     let (_, _, err) = tmk(&["lock", "decided.tmk"], &dir);
     assert!(!err.contains("does not decide"), "{err}");
 }
+
+#[test]
+fn fixes_found_while_preparing_the_agent_evaluation() {
+    // `push` may end a block.
+    let push = "fn evens(a: [int]) -> [int] {\n  var out = [0; 0]\n  for i in 0..a.len {\n    if a[i] % 2 == 0 { out.push(a[i]) }\n  }\n  out\n}\n\nfn main() uses io {\n  io.print(evens([1, 2, 4]).len)\n}\n";
+    let (code, _, err) = tmk(&["check", "push.tmk"], &scratch("push", push));
+    assert_eq!(code, 0, "{err}");
+    // An element read from an `int` array is a 64-bit value.
+    let elem = "pub fn low(a: [int]) -> int {\n  var s = 0\n  for i in 0..a.len {\n    let x = a[i]\n    if x >= 4_611_686_018_427_387_904 { s = x - 4_611_686_018_427_387_904 }\n  }\n  s\n}\n";
+    let (code, _, err) = tmk(&["check", "elem.tmk"], &scratch("elem", elem));
+    assert_eq!(code, 0, "{err}");
+    // Forty `match`es in a row used to double the path condition each time.
+    let mut many = String::from("fn half(x: int) -> int? {\n  if x % 2 == 0 { return Some(x / 2) }\n  None\n}\n\nfn main() uses io {\n");
+    for k in 0..40 {
+        many += &format!("  match half({k}) {{\n    Some(v) => io.print(v)\n    None => io.print(\"odd\")\n  }}\n");
+    }
+    many += "}\n";
+    let t0 = std::time::Instant::now();
+    let (code, _, err) = tmk(&["check", "many.tmk"], &scratch("many", &many));
+    assert_eq!(code, 0, "{err}");
+    assert!(t0.elapsed().as_secs() < 60, "took {:?}", t0.elapsed());
+}

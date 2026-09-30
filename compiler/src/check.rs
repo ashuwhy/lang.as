@@ -524,7 +524,9 @@ impl<'a> Checker<'a> {
         let mut never = false;
         for (i, s) in b.stmts.iter().enumerate() {
             let last = i + 1 == n;
-            if last {
+            // `a.push(x)` is a statement even when it ends a block.
+            let push = matches!(s, Stmt::Expr(Expr { kind: ExprKind::Call(c, _), .. }) if matches!(&c.kind, ExprKind::Field(_, f) if f == "push"));
+            if last && !push {
                 if let Stmt::Expr(e) = s {
                     if expected == Some(&Ty::Unit) {
                         let te = self.check_expr(e, None)?;
