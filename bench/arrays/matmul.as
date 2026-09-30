@@ -1,16 +1,7 @@
 // Multiply two 400x400 integer matrices stored as flat arrays, then checksum the result.
-fn matmul(a: [int], b: [int], n: int) -> [int]
-  requires 1 <= n && n <= 2_000
-  requires a.len == n * n && b.len == n * n
-  requires forall i in 0..a.len: 0 <= a[i] && a[i] <= 1_000
-  requires forall i in 0..b.len: 0 <= b[i] && b[i] <= 1_000
-  ensures result.len == n * n
-  ensures forall t in 0..result.len: 0 <= result[t] && result[t] <= n * 1_000_000
-{
+fn matmul(a: [int], b: [int], n: int) -> [int] {
   var c = [0; n * n]
-  for i in 0..n
-    invariant forall t in 0..c.len: 0 <= c[t] && c[t] <= n * 1_000_000
-  {
+  for i in 0..n {
     for j in 0..n
       invariant forall t in 0..c.len: 0 <= c[t] && c[t] <= n * 1_000_000
     {
@@ -24,11 +15,7 @@ fn matmul(a: [int], b: [int], n: int) -> [int]
   c
 }
 
-fn fill(n: int, seed: int) -> [int]
-  requires 1 <= n && n <= 2_000 && 0 <= seed && seed < 1_000
-  ensures result.len == n * n
-  ensures forall i in 0..result.len: 0 <= result[i] && result[i] <= 1_000
-{
+fn fill(n: int, seed: int) -> [int] {
   var m = [0; n * n]
   var x = seed
   for i in 0..n * n {

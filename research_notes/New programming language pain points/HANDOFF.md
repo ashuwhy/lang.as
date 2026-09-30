@@ -31,7 +31,10 @@ Done, all on `research/language-pain-points`:
 - `llms.txt`: the complete v0.1 reference (2,370 tokens). `README.md`: rewritten; every claim
   is backed by a test or a benchmark in the repo. The 2021 prototype is in `legacy/`.
 - `bench/perf/`: AS against Rust. On this container AS beat Rust on `primes`, tied checked
-  Rust on `collatz`, and was within about 12% of unchecked Rust on `isqrt`.
+  Rust on `collatz`, and was within about 12% of unchecked Rust on `isqrt`. (Re-measured after
+  contract inference, same container type: `primes` 611 ms vs Rust 607; `collatz` 749 vs 529
+  unchecked and 852 checked; `isqrt` 135 vs 91 unchecked and 124 checked. The old and new AS
+  `isqrt` run at the same speed, so the `isqrt` gap is GCC against LLVM, not inference.)
 
 Later the same day (v0.2, arrays): `[T]` arrays with proved bounds, reference counting with
 copy-on-write and last-use moves (`compiler/src/own.rs`), `for` loops with generated invariants
@@ -47,10 +50,32 @@ tightest and re-validated, then proved again in the normal pass; if one fails th
 dropped and the function re-verified. Benchmark sources shrank 18%. Debug with
 `ASLANG_TRACE=1` (solver calls and timings) and `ASLANG_DUMP=<dir>` (every SMT script).
 
+Then contract inference for private functions (`infer_contracts` and `simplify` in
+`verify.rs`, templates in `infer::contract_candidates`): Houdini over the whole module. Each
+private function starts with template `requires` (relations between parameters and array
+lengths, constant bounds, element ranges) and `ensures` (the same over `result`). A `requires`
+candidate survives only if every call site proves it, an `ensures` candidate only if every
+return does; functions are re-run (callees first) until nothing changes. Each probe sees only
+the facts recorded before it, loops that turn out unreachable under the still-contradictory
+early candidates are skipped, and clauses implied by the others are dropped for display. The
+survivors are then verified like written contracts; any that fails is dropped and everything
+is verified again (the last attempt infers none). `pub` functions never get inferred
+contracts: they are the API, pinned by the lock (SepInfer's floor guard). Proved inferred
+preconditions also reach the C optimiser as `AS_ASSUME` hints. Benchmark sources went from
+1,801 to 1,437 o200k tokens (2,185 before any inference; Rust is 1,221). One hand-written
+invariant is left in the seven programs; `primes` and `isqrt` are shorter than Rust.
+Verification of the heaviest benchmark (`matmul`) takes about 9 s.
+
+SepInfer and this work: the floor guard is the lock; inference only adds proved facts and
+never touches a written or pinned contract. Separation logic itself is not needed, because AS
+has value semantics (no aliasing). SepInfer's forward symbolic execution does fit one gap
+(item 1 below).
+
 Next, in order:
 
-1. Infer postconditions of private functions (the remaining contract tokens), and make
-   inference faster (it takes 4-8 s on the heaviest benchmarks).
+1. Exact summaries for small loop-free private helpers (SepInfer-style forward symbolic
+   execution: callers see `result == lo + (hi - lo) / 2`, which templates cannot express), and
+   faster inference (parallel solver calls per function; `matmul` takes about 9 s).
 2. Strings, arrays inside records and enums, recursive enums (heap values in general).
 3. Generics, modules, `?`, sized integers, termination of recursion; floats.
 4. More proof-driven optimisation (`restrict` from value semantics, narrowing proved-small

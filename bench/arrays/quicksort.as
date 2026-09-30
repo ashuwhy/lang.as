@@ -1,8 +1,5 @@
 // Sort 5,000,000 pseudo-random integers with quicksort, then checksum.
-fn quicksort(a: [int], lo: int, hi: int) -> [int]
-  requires 0 <= lo && lo <= hi && hi <= a.len
-  ensures result.len == a.len
-{
+fn quicksort(a: [int], lo: int, hi: int) -> [int] {
   if hi - lo < 2 { return a }
   var v = a
   let pivot = v[hi - 1]

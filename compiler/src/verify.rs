@@ -69,7 +69,24 @@ pub struct Report {
     pub solver_missing: bool,
     /// Invariants the compiler inferred, per loop.
     pub inferred: Vec<(Span, Vec<String>)>,
+    /// Contracts the compiler inferred for private functions: signature span, name, clauses.
+    pub inferred_contracts: Vec<(Span, String, Vec<String>)>,
+    /// The inferred preconditions themselves, per function: proved at every call site.
+    pub inferred_pre: HashMap<usize, Vec<TExpr>>,
     failed_inferred: Vec<(Span, String)>,
+    failed_contracts: Vec<(usize, String)>,
+}
+
+/// Inferred contract candidates of one private function.
+#[derive(Clone, Default)]
+pub struct Contract {
+    pub pre: Vec<crate::infer::Cand>,
+    pub post: Vec<crate::infer::Cand>,
+}
+
+enum Probe {
+    Pre(usize),
+    Post(usize),
 }
 
 pub struct Options {
@@ -109,19 +126,31 @@ struct Fv<'a> {
     sandbox: bool,
     infer: bool,
     z3: String,
-    timeout_ms: u32,
     preamble: String,
     consts: Vec<i128>,
     inferred: Vec<(Span, Vec<String>)>,
     /// Obligations of inferred invariants: proved like any other, but not counted.
     inferred_sites: HashMap<Site, String>,
-    /// Survivors of earlier inference runs per loop, used to warm-start exploratory runs.
-    warm: HashMap<Span, Vec<crate::infer::Cand>>,
+    /// Survivors of earlier inference runs per loop, used to warm-start later runs.
+    warm: Warm,
+    /// Depth of exploratory runs of loop bodies (inside an outer loop's inference).
+    exploring: usize,
     retry: bool,
     /// Inferred invariants that failed a final proof; not offered again.
     skip: HashSet<(Span, String)>,
     started: std::time::Instant,
     budget_ms: u64,
+    fi: usize,
+    /// Loop invariants found by the last run under the same assumptions: used as they are.
+    exact: HashMap<Span, Vec<crate::infer::Cand>>,
+    last_found: HashMap<Span, Vec<crate::infer::Cand>>,
+    /// Inferred contracts of private functions, assumed and checked like written ones.
+    contracts: HashMap<usize, Contract>,
+    contract_sites: HashMap<Site, (usize, String)>,
+    /// While inferring contracts: record candidate goals at returns and call sites.
+    probe: bool,
+    /// Each probe: target, facts known at that point, path condition, goals.
+    probes: Vec<(Probe, usize, String, Vec<String>)>,
 }
 
 pub fn sort(m: &Module, t: &Ty) -> String {
@@ -236,18 +265,51 @@ pub fn preamble(m: &Module) -> String {
 }
 
 pub fn verify(m: &Module, src: &Source, opts: &Options) -> Report {
-    let mut rep = Report::default();
     let pre = preamble(m);
-    rep.smt += &pre;
-    for f in &m.funcs {
+    let mut skip: HashSet<(usize, String)> = HashSet::new();
+    for attempt in 0..3 {
+        let (contracts, warm, exact) = if opts.infer && attempt < 2 { infer_contracts(m, src, opts, &pre, &skip) } else { (HashMap::new(), None, HashMap::new()) };
+        let mut rep = verify_funcs(m, src, opts, &pre, &contracts, warm, exact);
+        if !rep.failed_contracts.is_empty() && attempt < 2 {
+            // An inferred contract did not re-prove. Drop just those clauses and start again;
+            // the last attempt infers no contracts at all.
+            skip.extend(rep.failed_contracts.drain(..));
+            continue;
+        }
+        let mut fis: Vec<&usize> = contracts.keys().collect();
+        fis.sort();
+        for fi in fis {
+            let (f, c) = (&m.funcs[*fi], &contracts[fi]);
+            let clauses: Vec<String> = c.pre.iter().map(|x| format!("requires {}", x.text)).chain(c.post.iter().map(|x| format!("ensures {}", x.text))).collect();
+            if !clauses.is_empty() {
+                rep.inferred_contracts.push((f.sig_span, f.name.clone(), clauses));
+            }
+            rep.inferred_pre.insert(*fi, c.pre.iter().map(|x| x.e.clone()).collect());
+        }
+        return rep;
+    }
+    unreachable!()
+}
+
+fn verify_funcs(m: &Module, src: &Source, opts: &Options, pre: &str, contracts: &HashMap<usize, Contract>, mut warm_all: Option<Warm>, mut exact: HashMap<usize, Found>) -> Report {
+    let mut rep = Report::default();
+    rep.smt += pre;
+    for (fi, f) in m.funcs.iter().enumerate() {
         let mut skip: HashSet<(Span, String)> = HashSet::new();
-        let mut warm = HashMap::new();
+        // Loop invariants found while inferring contracts were found under the same
+        // assumptions, so they are the starting point here.
+        let warm_start = warm_all.is_some();
+        let mut warm = warm_all.take().unwrap_or_default();
         for attempt in 0..4 {
-            let mut fv = Fv::new(m, src, f, opts, &pre);
+            let mut fv = Fv::new(m, src, f, opts, pre);
             fv.infer = opts.infer && attempt < 3;
             fv.skip = skip.clone();
-            fv.retry = attempt > 0;
+            fv.retry = attempt > 0 || warm_start;
             fv.warm = std::mem::take(&mut warm);
+            fv.contracts = contracts.clone();
+            if attempt == 0 {
+                fv.exact = exact.remove(&fi).unwrap_or_default();
+            }
             let script = fv.run();
             let full = format!("{pre}(set-option :timeout {})\n{script}", opts.timeout_ms);
             let t0 = std::time::Instant::now();
@@ -262,7 +324,7 @@ pub fn verify(m: &Module, src: &Source, opts: &Options) -> Report {
             fv.collect(answers, &mut one);
             if std::env::var("ASLANG_TRACE").is_ok() {
                 let n: usize = fv.inferred.iter().map(|(_, v)| v.len()).sum();
-                eprintln!("[final] {} attempt {attempt}: {n} inferred, {} failed inferred, proved {} unknown {} refuted {} in {} ms; failed: {:?}", f.name, one.failed_inferred.len(), one.proved, one.runtime, one.refuted, t0.elapsed().as_millis(), one.failed_inferred.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>());
+                eprintln!("[final] {} attempt {attempt}: {n} inferred, {} failed inferred, {} failed contracts, proved {} unknown {} refuted {} in {} ms; failed: {:?}", f.name, one.failed_inferred.len(), one.failed_contracts.len(), one.proved, one.runtime, one.refuted, t0.elapsed().as_millis(), one.failed_inferred.iter().map(|(_, t)| t.clone()).chain(one.failed_contracts.iter().map(|(_, t)| t.clone())).collect::<Vec<_>>());
             }
             warm = std::mem::take(&mut fv.warm);
             if !one.failed_inferred.is_empty() && attempt < 3 {
@@ -275,16 +337,189 @@ pub fn verify(m: &Module, src: &Source, opts: &Options) -> Report {
             rep.inferred.extend(fv.inferred.drain(..));
             rep.verdicts.extend(one.verdicts);
             rep.diags.extend(one.diags);
+            rep.failed_contracts.extend(one.failed_contracts);
             rep.proved += one.proved;
             rep.runtime += one.runtime;
             rep.refuted += one.refuted;
             break;
         }
+        warm_all = if warm_start { Some(warm) } else { None };
     }
     if rep.solver_missing {
         rep.diags.push(Diagnostic::warning("W0251", Span::default(), format!("the SMT solver `{}` was not found, so nothing was proved", opts.z3)).with_fix("install Z3 or set ASLANG_Z3 to its path; until then every check is kept at run time"));
     }
     rep
+}
+
+/// Houdini over the whole module: every private function starts with template contracts;
+/// a `requires` candidate survives only if every call site establishes it, an `ensures`
+/// candidate only if every return proves it (assuming the surviving candidates everywhere).
+/// Repeats until nothing changes. The survivors are then verified like written contracts.
+type Found = HashMap<Span, Vec<crate::infer::Cand>>;
+
+/// What a loop's inference left for the next run: the final answer, and the survivors before
+/// pruning to the tightest bounds. With the same or weaker assumptions the next answer is a
+/// subset of the second; the first is only a fast guess for re-exploring nested loops.
+#[derive(Clone, Default)]
+struct WarmSet {
+    pruned: Vec<crate::infer::Cand>,
+    full: Option<Vec<crate::infer::Cand>>,
+}
+type Warm = HashMap<Span, WarmSet>;
+
+/// Returns the contracts, plus the loop invariants found under them: warm-start sets, and the
+/// exact answer per function from its last run.
+fn infer_contracts(m: &Module, src: &Source, opts: &Options, pre: &str, skip: &HashSet<(usize, String)>) -> (HashMap<usize, Contract>, Option<Warm>, HashMap<usize, Found>) {
+    let n = m.funcs.len();
+    let callees: Vec<HashSet<usize>> = m.funcs.iter().map(|f| crate::infer::callees(&f.body)).collect();
+    let callers_of: Vec<Vec<usize>> = (0..n).map(|g| (0..n).filter(|&f| callees[f].contains(&g)).collect()).collect();
+    let callers = |g: usize| callers_of[g].iter().copied();
+    let mut module_consts = vec![];
+    for f in &m.funcs {
+        module_consts.extend(crate::infer::constants(m, f));
+    }
+    let mut cs: HashMap<usize, Contract> = HashMap::new();
+    for (fi, f) in m.funcs.iter().enumerate() {
+        if f.is_pub || f.name == "main" {
+            continue;
+        }
+        let mut consts = crate::infer::constants(m, f);
+        consts.extend(module_consts.iter().copied());
+        let mut seen = HashSet::new();
+        consts.retain(|v| seen.insert(*v));
+        consts.truncate(20);
+        let (mut p, mut q) = crate::infer::contract_candidates(m, f, &consts, f.sig_span);
+        if callers(fi).next().is_none() {
+            p.clear();
+        }
+        p.retain(|c| !skip.contains(&(fi, format!("requires {}", c.text))));
+        q.retain(|c| !skip.contains(&(fi, format!("ensures {}", c.text))));
+        if !p.is_empty() || !q.is_empty() {
+            cs.insert(fi, Contract { pre: p, post: q });
+        }
+    }
+    if cs.is_empty() {
+        return (cs, None, HashMap::new());
+    }
+    // Callees first, so their results are settled before their callers use them.
+    let mut order = vec![];
+    let mut state = vec![0u8; n];
+    fn visit(f: usize, callees: &[HashSet<usize>], state: &mut [u8], order: &mut Vec<usize>) {
+        if state[f] != 0 {
+            return;
+        }
+        state[f] = 1;
+        let mut cs: Vec<&usize> = callees[f].iter().collect();
+        cs.sort();
+        for g in cs {
+            visit(*g, callees, state, order);
+        }
+        order.push(f);
+    }
+    for f in 0..n {
+        visit(f, &callees, &mut state, &mut order);
+    }
+    let mut dirty: HashSet<usize> = (0..n).filter(|f| cs.contains_key(f) || callees[*f].iter().any(|g| cs.contains_key(g))).collect();
+    let mut warm = HashMap::new();
+    let trace = std::env::var("ASLANG_TRACE").is_ok();
+    let t0 = std::time::Instant::now();
+    let mut last_found = HashMap::new();
+    for round in 0..20 {
+        if dirty.is_empty() {
+            simplify(m, src, opts, pre, &mut cs);
+            return (cs, Some(warm), last_found);
+        }
+        let mut next = HashSet::new();
+        for &fi in &order {
+            if !dirty.contains(&fi) {
+                continue;
+            }
+            let mut fv = Fv::new(m, src, &m.funcs[fi], opts, pre);
+            fv.sandbox = true;
+            fv.probe = true;
+            fv.contracts = cs.clone();
+            fv.warm = std::mem::take(&mut warm);
+            fv.run();
+            let points: Vec<(usize, String, Vec<String>)> = fv.probes.iter().map(|(_, k, pc, g)| (*k, pc.clone(), g.clone())).collect();
+            let keep = fv.valid_at(&points);
+            warm = std::mem::take(&mut fv.warm);
+            last_found.insert(fi, std::mem::take(&mut fv.last_found));
+            for ((probe, _, _, _), keep) in fv.probes.iter().zip(keep) {
+                // `keep` refers to the candidates this run started with; an earlier probe may
+                // already have removed some, so match by text.
+                let (g, pre_side) = match probe {
+                    Probe::Pre(g) => (*g, true),
+                    Probe::Post(g) => (*g, false),
+                };
+                let started = if pre_side { &fv.contracts[&g].pre } else { &fv.contracts[&g].post };
+                let dropped: HashSet<&str> = started.iter().zip(&keep).filter(|(_, k)| !**k).map(|(c, _)| c.text.as_str()).collect();
+                let list = if pre_side { &mut cs.get_mut(&g).unwrap().pre } else { &mut cs.get_mut(&g).unwrap().post };
+                let before = list.len();
+                list.retain(|c| !dropped.contains(c.text.as_str()));
+                if list.len() == before {
+                    continue;
+                }
+                if trace {
+                    eprintln!("[contracts] {} drops from `{}`: {:?}", m.funcs[fi].name, m.funcs[g].name, dropped);
+                }
+                if pre_side {
+                    next.insert(g);
+                } else {
+                    next.extend(callers(g));
+                }
+            }
+            if trace {
+                eprintln!("[contracts] round {round} {}: {} probes, {} ms", m.funcs[fi].name, fv.probes.len(), t0.elapsed().as_millis());
+            }
+        }
+        dirty = next;
+    }
+    (HashMap::new(), None, HashMap::new())
+}
+
+/// Drop every inferred clause that the others (and the written contract) already imply, so
+/// what `--show-inferred` prints is short. Relations are preferred over constant bounds.
+fn simplify(m: &Module, src: &Source, opts: &Options, pre: &str, cs: &mut HashMap<usize, Contract>) {
+    let fewest = |fv: &mut Fv, st: &St, cands: &mut Vec<crate::infer::Cand>| {
+        let goals: Vec<String> = cands.iter().map(|c| fv.spec_expr(&c.e, st)).collect();
+        let mut keep = vec![true; goals.len()];
+        for i in (0..goals.len()).rev() {
+            let others: Vec<String> = (0..goals.len()).filter(|&j| j != i && keep[j]).map(|j| goals[j].clone()).collect();
+            if fv.all_valid(&st.pc, &[format!("(=> {} {})", and(others), goals[i])])[0] {
+                keep[i] = false;
+            }
+        }
+        let mut k = keep.into_iter();
+        cands.retain(|_| k.next().unwrap());
+    };
+    for (fi, c) in cs.iter_mut() {
+        let f = &m.funcs[*fi];
+        let mut fv = Fv::new(m, src, f, opts, pre);
+        fv.sandbox = true;
+        let mut st = St { pc: "true".into(), env: HashMap::new() };
+        for &p in &f.params {
+            let ty = m.locals[p as usize].ty.clone();
+            let v = fv.fresh(&m.locals[p as usize].name, &ty);
+            let w = fv.wf(&ty, &v);
+            st.env.insert(p, v);
+            fv.fact(&st, w);
+        }
+        for r in &f.requires {
+            let g = fv.spec_expr(r, &st);
+            fv.fact(&st, g);
+        }
+        fewest(&mut fv, &st, &mut c.pre);
+        for x in &c.pre {
+            let g = fv.spec_expr(&x.e, &st);
+            fv.fact(&st, g);
+        }
+        let r = fv.fresh("result", &f.ret);
+        let w = fv.wf(&f.ret.clone(), &r);
+        st.env.insert(f.result, r);
+        fv.fact(&st, w);
+        fewest(&mut fv, &st, &mut c.post);
+    }
+    cs.retain(|_, c| !c.pre.is_empty() || !c.post.is_empty());
 }
 
 fn run_z3(z3: &str, script: &str) -> Option<Vec<SExp>> {
@@ -322,16 +557,23 @@ impl<'a> Fv<'a> {
             sandbox: false,
             infer: opts.infer,
             z3: opts.z3.clone(),
-            timeout_ms: opts.timeout_ms,
             preamble: pre.to_string(),
             consts: crate::infer::constants(m, f),
             inferred: vec![],
             inferred_sites: HashMap::new(),
             skip: HashSet::new(),
             warm: HashMap::new(),
+            exploring: 0,
             retry: false,
             started: std::time::Instant::now(),
             budget_ms: 10_000,
+            fi: m.funcs.iter().position(|g| std::ptr::eq(g, f)).unwrap_or(usize::MAX),
+            exact: HashMap::new(),
+            last_found: HashMap::new(),
+            contracts: HashMap::new(),
+            contract_sites: HashMap::new(),
+            probe: false,
+            probes: vec![],
         }
     }
 
@@ -488,6 +730,10 @@ impl<'a> Fv<'a> {
         for r in reqs {
             self.fact(&st, r);
         }
+        for c in self.contracts.get(&self.fi).map(|c| c.pre.clone()).unwrap_or_default() {
+            let g = self.spec_expr(&c.e, &st);
+            self.fact(&st, g);
+        }
         let body = &f.body;
         let (end, val) = self.expr(body, st.clone());
         if let Some(end) = end {
@@ -531,6 +777,20 @@ impl<'a> Fv<'a> {
             let what = format!("`{}` may not return a value satisfying `ensures {}`", f.name, f.ensures_src[i]);
             let extra = if f.ret == Ty::Unit { vec![] } else { vec![("result".to_string(), val.to_string())] };
             self.check(st, Site { kind: SiteKind::Ensures(i), span }, g, what, Some("fix the code, or state a weaker `ensures` only if that is the real intent (a pinned contract cannot be weakened silently)".into()), extra);
+        }
+        let posts = self.contracts.get(&self.fi).map(|c| c.post.clone()).unwrap_or_default();
+        if posts.is_empty() {
+            return;
+        }
+        let goals: Vec<String> = posts.iter().map(|c| self.spec_expr(&c.e, &st2)).collect();
+        if self.probe {
+            self.probes.push((Probe::Post(self.fi), self.events.len(), st.pc.clone(), goals));
+            return;
+        }
+        for (k, (c, g)) in posts.iter().zip(goals).enumerate() {
+            let site = Site { kind: SiteKind::Ensures(f.ensures.len() + k), span };
+            self.contract_sites.insert(site, (self.fi, c.text.clone()));
+            self.check(st, site, g, format!("inferred `ensures {}` of `{}` may not hold", c.text, f.name), None, vec![]);
         }
     }
 
@@ -596,15 +856,25 @@ impl<'a> Fv<'a> {
                     let what = format!("this call may break `requires {}` of `{}`", callee.requires_src[i], callee.name);
                     self.check(&st, Site { kind: SiteKind::Requires(i), span: e.span }, g, what, Some(format!("check `{}` before calling, or add it to the `requires` of `{}`", callee.requires_src[i], self.f.name)), arg_show.clone());
                 }
+                let inferred = self.contracts.get(fi).cloned().unwrap_or_default();
+                if !inferred.pre.is_empty() && !self.spec {
+                    let goals: Vec<String> = inferred.pre.iter().map(|c| self.spec_expr(&c.e, &St { pc: "true".into(), env: cenv.clone() })).collect();
+                    if self.probe {
+                        self.probes.push((Probe::Pre(*fi), self.events.len(), st.pc.clone(), goals));
+                    } else {
+                        for (k, (c, g)) in inferred.pre.iter().zip(goals).enumerate() {
+                            let site = Site { kind: SiteKind::Requires(callee.requires.len() + k), span: e.span };
+                            self.contract_sites.insert(site, (*fi, c.text.clone()));
+                            self.check(&st, site, g, format!("this call may break the inferred `requires {}` of `{}`", c.text, callee.name), None, arg_show.clone());
+                        }
+                    }
+                }
                 let r = self.fresh(&format!("{}_ret", callee.name), &callee.ret);
                 let w = self.wf(&callee.ret.clone(), &r);
                 self.fact(&st, w);
                 cenv.insert(callee.result, r.clone());
-                for en in &callee.ensures {
-                    let saved = self.spec;
-                    self.spec = true;
-                    let (_, g) = self.expr(en, St { pc: "true".into(), env: cenv.clone() });
-                    self.spec = saved;
+                for en in callee.ensures.iter().chain(inferred.post.iter().map(|c| &c.e)) {
+                    let g = self.spec_expr(en, &St { pc: "true".into(), env: cenv.clone() });
                     self.fact(&st, g);
                 }
                 (Some(st), r)
@@ -930,6 +1200,17 @@ impl<'a> Fv<'a> {
     /// Houdini: start from template candidates, keep those true on entry, then repeatedly
     /// drop any the loop body can break until the rest are inductive.
     fn infer_loop(&mut self, st: &St, cond: &TExpr, user: &[TExpr], modified: &[LocalId], body: &TExpr, span: Span) -> Vec<crate::infer::Cand> {
+        if !self.sandbox {
+            if let Some(found) = self.exact.get(&span) {
+                return found.iter().filter(|c| !self.skip.contains(&(span, c.text.clone()))).cloned().collect();
+            }
+        }
+        let found = self.infer_loop_inner(st, cond, user, modified, body, span);
+        self.last_found.insert(span, found.clone());
+        found
+    }
+
+    fn infer_loop_inner(&mut self, st: &St, cond: &TExpr, user: &[TExpr], modified: &[LocalId], body: &TExpr, span: Span) -> Vec<crate::infer::Cand> {
         let mut scope = vec![];
         let mut ids: Vec<LocalId> = st.env.keys().copied().filter(|id| *id != crate::infer::QUANT_VAR).collect();
         ids.sort();
@@ -947,35 +1228,58 @@ impl<'a> Fv<'a> {
         if trace {
             eprintln!("[loop] start {:?} sandbox={} elapsed {} ms", span, self.sandbox, self.started.elapsed().as_millis());
         }
-        let mut all = match self.warm.get(&span) {
-            // Inside an outer loop's exploratory run, or when re-verifying after a failed
-            // inferred invariant, start from what survived before.
-            Some(prev) if self.sandbox || self.retry => prev.clone(),
+        let prev = self.warm.get(&span).cloned().unwrap_or_default();
+        let mut all = match prev.full {
+            // Re-exploring inside an outer loop's inference: last answer, as a fast guess.
+            _ if self.exploring > 0 && !prev.pruned.is_empty() => prev.pruned.clone(),
+            // A later run (next contract round, or a retry after a failed inferred invariant).
+            Some(full) if self.sandbox || self.retry => full,
             _ => crate::infer::candidates(self.m, &self.consts, modified, &scope, body, span),
         };
         all.retain(|c| !self.skip.contains(&(span, c.text.clone())));
         // Cheap scalar bounds first; element ranges of arrays second, with the scalars known.
         let (quantified, scalar): (Vec<_>, Vec<_>) = all.into_iter().partition(|c| matches!(c.e.kind, TExprKind::Quant { .. }));
-        let mut found = self.houdini(st, cond, user, modified, body, scalar);
+        let mut top = (false, vec![]);
+        let mut found = self.houdini(st, cond, user, modified, body, scalar, Some(&mut top));
+        let (unreachable, mut full) = top;
+        if unreachable {
+            // Only while contracts are still being inferred: every candidate would survive.
+            // Let a later run start from scratch.
+            self.warm.remove(&span);
+            return vec![];
+        }
         if !quantified.is_empty() {
             let mut known: Vec<TExpr> = user.to_vec();
             known.extend(found.iter().map(|c| c.e.clone()));
-            let more = self.houdini(st, cond, &known, modified, body, quantified);
+            let mut top = (false, vec![]);
+            let more = self.houdini(st, cond, &known, modified, body, quantified, Some(&mut top));
             found.extend(more);
+            full.extend(top.1);
         }
         if trace {
             eprintln!("[loop] done {:?} -> {} found in {} ms", span, found.len(), t0.elapsed().as_millis());
         }
-        self.warm.insert(span, found.clone());
+        let w = self.warm.entry(span).or_default();
+        w.pruned = found.clone();
+        if self.exploring == 0 {
+            w.full = Some(full);
+        }
         found
     }
 
-    fn houdini(&mut self, st: &St, cond: &TExpr, user: &[TExpr], modified: &[LocalId], body: &TExpr, mut cands: Vec<crate::infer::Cand>) -> Vec<crate::infer::Cand> {
+    fn houdini(&mut self, st: &St, cond: &TExpr, user: &[TExpr], modified: &[LocalId], body: &TExpr, mut cands: Vec<crate::infer::Cand>, mut top: Option<&mut (bool, Vec<crate::infer::Cand>)>) -> Vec<crate::infer::Cand> {
         if cands.is_empty() {
             return cands;
         }
-        let entry: Vec<String> = cands.iter().map(|c| self.spec_expr(&c.e, st)).collect();
-        let keep = self.all_valid(&st.pc, &entry);
+        let mut entry: Vec<String> = cands.iter().map(|c| self.spec_expr(&c.e, st)).collect();
+        entry.push("false".into());
+        let mut keep = self.all_valid(&st.pc, &entry);
+        if keep.pop() == Some(true) {
+            if let Some(t) = top.as_deref_mut() {
+                t.0 = true;
+            }
+            return vec![];
+        }
         cands = cands.into_iter().zip(keep).filter(|(_, k)| *k).map(|(c, _)| c).collect();
         let mut converged = false;
         for _round in 0..60 {
@@ -983,8 +1287,10 @@ impl<'a> Fv<'a> {
                 converged = true;
                 break;
             }
-            let (events, saved) = (self.events.len(), self.sandbox);
+            let (events, saved, probing) = (self.events.len(), self.sandbox, self.probe);
             self.sandbox = true;
+            self.probe = false;
+            self.exploring += 1;
             let head = self.loop_head(st, modified, body);
             for inv in user.iter().chain(cands.iter().map(|c| &c.e)) {
                 let g = self.spec_expr(inv, &head);
@@ -1005,6 +1311,8 @@ impl<'a> Fv<'a> {
             };
             self.events.truncate(events);
             self.sandbox = saved;
+            self.probe = probing;
+            self.exploring -= 1;
             if keep.iter().all(|k| *k) {
                 converged = true;
                 break;
@@ -1014,6 +1322,9 @@ impl<'a> Fv<'a> {
         if !converged {
             return vec![];
         }
+        if let Some(t) = top {
+            t.1 = cands.clone();
+        }
         let before = cands.len();
         let pruned = crate::infer::tightest(cands);
         if pruned.len() == before {
@@ -1021,40 +1332,70 @@ impl<'a> Fv<'a> {
         }
         // Dropping looser bounds can break inductiveness when a bound only implies another
         // under side conditions, so the pruned set is checked again.
-        self.houdini(st, cond, user, modified, body, pruned)
+        self.houdini(st, cond, user, modified, body, pruned, None)
     }
 
-    /// Which goals hold in every state satisfying the facts so far and `pc`? One solver call
-    /// per round: a counterexample to the conjunction rules out every goal it falsifies.
     /// Which goals hold in every state satisfying the facts so far and `pc`? One solver
     /// process checks each goal separately with a short time limit, so a hard goal only
     /// costs its own limit and never hides the easy ones.
     fn all_valid(&mut self, pc: &str, goals: &[String]) -> Vec<bool> {
-        if goals.is_empty() || self.out_of_budget() {
-            return vec![false; goals.len()];
+        self.valid_at(&[(self.events.len(), pc.to_string(), goals.to_vec())]).remove(0)
+    }
+
+    /// `all_valid` for several program points at once, each knowing only the facts recorded
+    /// before it (in order: a later fact may be an assumption that does not hold yet). Scalar and quantified goals go to two
+    /// solver processes running side by side: true quantified goals are proved fast and false
+    /// ones rarely get a model, so they get a shorter time limit.
+    fn valid_at(&mut self, points: &[(usize, String, Vec<String>)]) -> Vec<Vec<bool>> {
+        let mut out: Vec<Vec<bool>> = points.iter().map(|(_, _, g)| vec![false; g.len()]).collect();
+        if points.iter().all(|(_, _, g)| g.is_empty()) || self.out_of_budget() {
+            return out;
         }
-        // True quantified goals are proved fast; false ones rarely get a model, so they only
-        // get a short limit.
-        let limit = if goals.iter().any(|g| g.contains("(forall")) { 150 } else { 500 };
-        let mut script = format!("{}(set-option :timeout {limit})\n", self.preamble);
+        let mut base = self.preamble.clone();
         for d in &self.decls {
-            script += d;
-            script.push('\n');
+            base += d;
+            base.push('\n');
         }
-        for e in &self.events {
-            if let Event::Fact(f) = e {
-                script += &format!("(assert {f})\n");
+        let events = &self.events;
+        let script = |quant: bool, limit: u32| {
+            let mut s = format!("(set-option :timeout {limit})\n{base}");
+            let mut slots = vec![];
+            let mut order: Vec<usize> = (0..points.len()).collect();
+            order.sort_by_key(|&p| points[p].0);
+            let mut asserted = 0;
+            for p in order {
+                let (known, pc, goals) = &points[p];
+                let mine: Vec<usize> = (0..goals.len()).filter(|&k| goals[k].contains("(forall") == quant).collect();
+                if mine.is_empty() {
+                    continue;
+                }
+                for e in &events[asserted..*known] {
+                    if let Event::Fact(f) = e {
+                        s += &format!("(assert {f})\n");
+                    }
+                }
+                asserted = asserted.max(*known);
+                s += &format!("(push 1)\n(assert {pc})\n");
+                for k in mine {
+                    s += &format!("(push 1)\n(assert (not {}))\n(check-sat)\n(pop 1)\n", goals[k]);
+                    slots.push((p, k));
+                }
+                s += "(pop 1)\n";
+            }
+            (s, slots)
+        };
+        let jobs = [script(false, 500), script(true, 150)];
+        let z3 = &self.z3;
+        let answers: Vec<Option<Vec<SExp>>> = std::thread::scope(|sc| {
+            let hs: Vec<_> = jobs.iter().map(|(s, slots)| sc.spawn(move || if slots.is_empty() { Some(vec![]) } else { run_z3(z3, s) })).collect();
+            hs.into_iter().map(|h| h.join().ok().flatten()).collect()
+        });
+        for ((_, slots), ans) in jobs.iter().zip(answers) {
+            let Some(ans) = ans else { continue };
+            for (&(p, k), a) in slots.iter().zip(ans) {
+                out[p][k] = matches!(a, SExp::Atom(ref s) if s == "unsat");
             }
         }
-        script += &format!("(assert {pc})\n");
-        for g in goals {
-            script += &format!("(push 1)\n(assert (not {g}))\n(check-sat)\n(pop 1)\n");
-        }
-        let Some(ans) = run_z3(&self.z3, &script) else {
-            return vec![false; goals.len()];
-        };
-        let mut out: Vec<bool> = ans.iter().map(|a| matches!(a, SExp::Atom(s) if s == "unsat")).collect();
-        out.resize(goals.len(), false);
         out
     }
 
@@ -1099,6 +1440,13 @@ impl<'a> Fv<'a> {
                 _ => Verdict::Unknown,
             };
             if site.kind.is_hint() {
+                rep.verdicts.insert(*site, verdict);
+                continue;
+            }
+            if let Some((fi, text)) = self.contract_sites.get(site) {
+                if verdict != Verdict::Proved {
+                    rep.failed_contracts.push((*fi, text.clone()));
+                }
                 rep.verdicts.insert(*site, verdict);
                 continue;
             }

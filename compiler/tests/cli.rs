@@ -165,3 +165,28 @@ fn inference_removes_bound_invariants_but_never_hides_bugs() {
     let (code, _, _) = aslang(&["check", "--no-infer", "inferred.as"], &dir);
     assert_eq!(code, 1);
 }
+
+#[test]
+fn contracts_of_private_functions_are_inferred_from_their_calls() {
+    // No contracts written: `get` is only called with an index in bounds, and `fill` returns
+    // an array as long as asked for; both facts are inferred and proved.
+    let ok = "fn fill(n: int) -> [int] {\n  var a = [0; n]\n  for i in 0..n {\n    a[i] = i % 10\n  }\n  a\n}\n\nfn get(a: [int], i: int) -> int {\n  a[i]\n}\n\nfn main() uses io {\n  let a = fill(5)\n  io.print(get(a, 4) + get(a, 0))\n}\n";
+    let dir = scratch("contracts", ok);
+    let (code, _, err) = aslang(&["check", "--show-inferred", "contracts.as"], &dir);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("ensures result.len == n"), "{err}");
+    assert!(err.contains("inferred for `get`"), "{err}");
+    let (code, out, err) = aslang(&["run", "contracts.as"], &dir);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "4");
+
+    // One call passes an index one past the end: no inferred contract can hide that.
+    expect_error("past_end", &ok.replace("get(a, 0)", "get(a, 5)"), "E0210");
+    // A result the caller cannot safely add twice.
+    let big = "fn pick(x: int) -> int {\n  if x > 0 { return x }\n  9_000_000_000_000_000_000\n}\n\nfn main() uses io {\n  io.print(pick(0) + pick(0))\n}\n";
+    expect_error("big_result", big, "E0201");
+    let (code, _, err) = aslang(&["check", "fine.as"], &scratch("fine", &big.replace("pick(0)", "pick(5)")));
+    assert_eq!(code, 0, "{err}");
+    // A public function is API: its callers here say nothing about callers elsewhere.
+    expect_error("public", &ok.replace("fn get", "pub fn get"), "E0210");
+}

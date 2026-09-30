@@ -1,9 +1,6 @@
 // Longest Collatz chain for a start below 3,000,000.
 // AS will not let `3 * x + 1` overflow silently, so the guard below is required.
-pub fn chain(start: int) -> int
-  requires 1 <= start && start <= 3_000_000
-  ensures result >= 1
-{
+fn chain(start: int) -> int {
   var x = start
   var steps = 1
   while x != 1 {

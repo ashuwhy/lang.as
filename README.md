@@ -77,22 +77,24 @@ facts are handed to the C optimiser, and proved-safe divisions use cheaper 32-bi
 instructions. On the integer benchmarks in `bench/perf/` that last one lets AS beat Rust on
 `primes` (665 ms against 673).
 
-The cost is source length: AS programs state the contracts their proofs need. The compiler now
-infers loop invariants itself, which cut the benchmark sources by 18% (up to 38%) and removed
-every hand-written invariant from five of the seven programs; `primes` is now within 5% of the
-Rust version's tokens. Contracts on functions remain the main difference from Rust, which
-states none (`bench/arrays/RESULTS.md`).
+Proofs used to cost source length, because every contract a proof needed had to be written.
+The compiler now infers loop invariants, and the `requires` and `ensures` of private functions
+(from their call sites and returns), and proves what it infers like hand-written contracts.
+Across the seven benchmark programs, AS source shrank by a third (2,185 to 1,437 tokens) and
+one hand-written invariant is left in total. `primes` and `isqrt` are now shorter than the Rust
+versions, and all seven together are within 18% of Rust (`bench/arrays/RESULTS.md`).
 
 ## Built for models as well as people
 
-- **The whole language fits in 2,888 tokens.** [`llms.txt`](llms.txt) is the complete
+- **The whole language fits in 3,075 tokens.** [`llms.txt`](llms.txt) is the complete
   reference; a model that reads it can write AS.
 - **Short.** On four small programs with identical proved contracts, AS takes 230 tokens against
   Dafny's 249, Verus's 266 and Vera's 447 (`bench/tokens/`).
 - **Errors are instructions.** Every diagnostic has a stable code, a fix, and a counterexample
   where there is one, in text or `--json`; `aslang explain E0201` explains any code.
-- **Invariants you do not have to write.** Loop bounds are inferred and proved automatically;
-  `--show-inferred` shows them. You write only the properties you care about.
+- **Contracts you do not have to write.** Loop invariants, and the contracts of private
+  functions, are inferred and proved automatically; `--show-inferred` shows them. You write
+  contracts for the public API and for the properties you care about.
 - **A definite finish line.** `N checks proved, 0 kept at run time` tells an agent it is done.
 - **Greppable.** Effects are called by name (`io.print`), variant names are global, there are no
   macros, overloading or implicit conversions.
@@ -117,8 +119,8 @@ Working: integers with proved overflow safety, booleans, records, enums, `Option
 refinement types, arrays with proved bounds (reference-counted, copy-on-write, moved on last
 use, so passing and returning arrays does not copy), `for` loops with automatic termination
 proofs, `forall`/`exists` in contracts, functions, `let`/`var`, `if`/`match`/`while`,
-`requires`/`ensures`/`invariant`/`decreases`, effects, named arguments, the contract lock, and
-native binaries through C. Not yet: strings as values, arrays inside other values, generics,
+`requires`/`ensures`/`invariant`/`decreases`, inference of loop invariants and of private
+functions' contracts, effects, named arguments, the contract lock, and native binaries through C. Not yet: strings as values, arrays inside other values, generics,
 modules, a standard library beyond `io.print`, FFI, concurrency, and proof of termination for
 recursion. The plan, the evidence behind every
 design rule, and the stop rules are in [`docs/DESIGN.md`](docs/DESIGN.md).

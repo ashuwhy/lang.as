@@ -77,6 +77,8 @@ pub struct Codegen<'a> {
     m: &'a Module,
     src: &'a Source,
     verdicts: &'a HashMap<Site, Verdict>,
+    /// Inferred preconditions, proved at every call site.
+    inferred_pre: &'a HashMap<usize, Vec<TExpr>>,
     out: String,
     tmp: usize,
     names: HashMap<LocalId, String>,
@@ -110,8 +112,8 @@ fn c_str(s: &str) -> String {
     o
 }
 
-pub fn generate(m: &Module, src: &Source, verdicts: &HashMap<Site, Verdict>) -> String {
-    let mut g = Codegen { m, src, verdicts, out: String::new(), tmp: 0, names: HashMap::new(), cur: 0, last: HashSet::new(), unique: HashSet::new(), arrays: vec![], in_spec: false };
+pub fn generate(m: &Module, src: &Source, verdicts: &HashMap<Site, Verdict>, inferred_pre: &HashMap<usize, Vec<TExpr>>) -> String {
+    let mut g = Codegen { m, src, verdicts, inferred_pre, out: String::new(), tmp: 0, names: HashMap::new(), cur: 0, last: HashSet::new(), unique: HashSet::new(), arrays: vec![], in_spec: false };
     g.run();
     g.out
 }
@@ -272,7 +274,8 @@ impl<'a> Codegen<'a> {
         }
         // Every call site proved or checked the precondition and the parameter refinements,
         // so the optimizer may rely on them.
-        for r in &f.requires {
+        let inferred = self.inferred_pre.get(&fi).cloned().unwrap_or_default();
+        for r in f.requires.iter().chain(&inferred) {
             s += &format!("  {}\n", self.assume(r));
         }
         for &p in &f.params {

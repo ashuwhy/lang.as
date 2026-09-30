@@ -20,7 +20,7 @@ options:
   --json          machine-readable output
   --no-verify     skip the prover; every check stays at run time
   --proved        fail unless every check is proved (no run-time checks)
-  --show-inferred print the loop invariants the compiler inferred
+  --show-inferred print the loop invariants and contracts the compiler inferred
   --no-infer      do not infer loop invariants
   --timeout <ms>  solver time budget per check (default 2000)
 ";
@@ -149,6 +149,7 @@ fn report(a: &Args, o: &Outcome, extra: serde_json::Value) -> bool {
         let v = json!({
             "file": a.file, "ok": ok,
             "summary": { "proved": p, "runtime_checked": r, "refuted": x, "errors": errors },
+            "inferred_contracts": o.report.as_ref().map(|r| r.inferred_contracts.iter().map(|(s, n, v)| { let (l, c) = o.src.line_col(s.lo); json!({"line": l, "col": c, "function": n, "clauses": v}) }).collect::<Vec<_>>()).unwrap_or_default(),
             "inferred_invariants": o.report.as_ref().map(|r| r.inferred.iter().map(|(s, v)| { let (l, c) = o.src.line_col(s.lo); json!({"line": l, "col": c, "invariants": v}) }).collect::<Vec<_>>()).unwrap_or_default(),
             "diagnostics": o.diags.iter().map(|d| d.to_json(&o.src)).collect::<Vec<_>>(),
             "notes": o.notes,
@@ -165,6 +166,13 @@ fn report(a: &Args, o: &Outcome, extra: serde_json::Value) -> bool {
         }
         if a.show_inferred {
             if let Some(r) = &o.report {
+                for (span, name, clauses) in &r.inferred_contracts {
+                    let (l, c) = o.src.line_col(span.lo);
+                    eprintln!("inferred for `{name}` at {}:{l}:{c}:", o.src.name);
+                    for i in clauses {
+                        eprintln!("    {i}");
+                    }
+                }
                 for (span, invs) in &r.inferred {
                     let (l, c) = o.src.line_col(span.lo);
                     eprintln!("inferred for the loop at {}:{l}:{c}:", o.src.name);
@@ -176,7 +184,13 @@ fn report(a: &Args, o: &Outcome, extra: serde_json::Value) -> bool {
         }
         let name = file_key(&a.file);
         let inferred: usize = o.report.as_ref().map(|r| r.inferred.iter().map(|(_, v)| v.len()).sum()).unwrap_or(0);
-        let inferred_note = if inferred > 0 { format!(" ({inferred} loop invariants inferred)") } else { String::new() };
+        let contracts: usize = o.report.as_ref().map(|r| r.inferred_contracts.iter().map(|(_, _, v)| v.len()).sum()).unwrap_or(0);
+        let inferred_note = match (inferred, contracts) {
+            (0, 0) => String::new(),
+            (i, 0) => format!(" ({i} loop invariants inferred)"),
+            (0, c) => format!(" ({c} contract clauses inferred)"),
+            (i, c) => format!(" ({i} loop invariants and {c} contract clauses inferred)"),
+        };
         if ok {
             if o.report.is_some() {
                 eprintln!("ok {name}: {p} checks proved, {r} kept at run time{inferred_note}");
@@ -197,7 +211,8 @@ fn build(a: &Args, o: &Outcome, out: &Path) -> Result<(), String> {
     }
     let empty = Default::default();
     let verdicts = o.report.as_ref().map(|r| &r.verdicts).unwrap_or(&empty);
-    let c = aslang::codegen::generate(m, &o.src, verdicts);
+    let no_pre = Default::default();
+    let c = aslang::codegen::generate(m, &o.src, verdicts, o.report.as_ref().map(|r| &r.inferred_pre).unwrap_or(&no_pre));
     let cfile = std::env::temp_dir().join(format!("aslang_{}_{}.c", std::process::id(), file_key(&a.file)));
     std::fs::write(&cfile, c).map_err(|e| e.to_string())?;
     // Any C compiler with GNU C extensions works; set CC to choose (gcc and clang are both tested).
@@ -245,7 +260,8 @@ fn main() {
             }
             let empty = Default::default();
             let v = o.report.as_ref().map(|r| &r.verdicts).unwrap_or(&empty);
-            print!("{}", aslang::codegen::generate(o.module.as_ref().unwrap(), &o.src, v));
+            let no_pre = Default::default();
+            print!("{}", aslang::codegen::generate(o.module.as_ref().unwrap(), &o.src, v, o.report.as_ref().map(|r| &r.inferred_pre).unwrap_or(&no_pre)));
         }
         "build" | "run" => {
             let o = analyse(&a, true);

@@ -1,7 +1,5 @@
 // Count primes below 50,000,000 with the sieve of Eratosthenes.
-fn count_primes(n: int) -> int
-  requires 2 <= n && n <= 100_000_000
-{
+fn count_primes(n: int) -> int {
   var composite = [false; n]
   var count = 0
   for i in 2..n {

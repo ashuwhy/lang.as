@@ -1,13 +1,8 @@
 // Sum of integer square roots below 3,000,000, each found by binary search.
-pub fn isqrt(n: int) -> int
-  requires 0 <= n && n <= 1_000_000_000_000
-  ensures result * result <= n && n < (result + 1) * (result + 1)
-{
+fn isqrt(n: int) -> int {
   var lo = 0
   var hi = 1_000_001
-  while hi - lo > 1
-    invariant lo * lo <= n && n < hi * hi
-  {
+  while hi - lo > 1 {
     let mid = lo + (hi - lo) / 2
     if mid * mid <= n { lo = mid } else { hi = mid }
   }
