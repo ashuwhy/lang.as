@@ -22,7 +22,7 @@ pub fn parse(toks: Vec<Token>) -> PResult<Program> {
     Ok(Program { items })
 }
 
-/// Parse a standalone expression (used for contracts stored in `aslang.lock`).
+/// Parse a standalone expression (used for contracts stored in `touchplate.lock`).
 pub fn parse_expr(toks: Vec<Token>) -> PResult<Expr> {
     let mut p = Parser { toks, pos: 0 };
     let e = p.expr()?;

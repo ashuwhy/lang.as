@@ -1,4 +1,4 @@
-# AS
+# Touchmark
 
 **A fast, memory-safe language where code carries its own proof of intent.** Built for the era
 in which AI writes most code and humans approve it.
@@ -9,7 +9,11 @@ code runs without safety overhead. What it cannot prove it rejects with a concre
 counterexample, or keeps as a run-time check and tells you so. And once a contract is pinned,
 an agent cannot quietly weaken it to make a failing check pass.
 
-```as
+The name comes from the silversmiths' touchmark: the maker's stamp that vouched for a piece,
+recorded on the guild's touchplate, a public register nobody could quietly alter. Here the
+proof is the mark on each function, and `touchplate.lock` is the register of pinned contracts.
+
+```tmk
 type Cents = int where 0 <= it && it <= 1_000_000_000_000
 type Account = { id: int, balance: Cents, frozen: bool }
 type Moved = { from: Account, to: Account }
@@ -32,16 +36,16 @@ pub fn transfer(from: Account, to: Account, amount: Cents) -> Result<Moved, Tran
 ```
 
 ```text
-$ aslang run examples/ledger.as
-ok ledger.as: 26 checks proved, 0 kept at run time
+$ tmk run examples/ledger.tmk
+ok ledger.tmk: 26 checks proved, 0 kept at run time
 moved, new balance: 30
 ```
 
-A proof is only as good as the contract, so AS also shows a reviewer what a contract means,
+A proof is only as good as the contract, so Touchmark also shows a reviewer what a contract means,
 with concrete values from the solver:
 
 ```text
-$ aslang examples examples/ledger.as
+$ tmk examples examples/ledger.tmk
 transfer
   allowed    transfer(from: { id: -999, balance: 999, frozen: true }, to: { id: -1000, balance: 0, frozen: false }, amount: 1000) -> Err(Frozen)
   decided    every allowed input has exactly one allowed result
@@ -51,7 +55,7 @@ transfer
 ```
 
 `decided` is proved: this contract fixes the result for every input. The first version of
-this example only pinned the two balances, and `aslang examples` showed why that was not
+this example only pinned the two balances, and `tmk examples` showed why that was not
 enough: the same transfer "may return" accounts with different ids, then an `Insufficient`
 error with any shortfall, then `Err(Insufficient(0))` where the money was there. Each finding
 became one `ensures` line. A weak contract such as `sum`'s `ensures result >= 0` shows up as
@@ -61,7 +65,7 @@ became one `ensures` line. A weak contract such as `sum`'s `ensures result >= 0`
 
 Each line below is a test in `compiler/tests/cli.rs`.
 
-| Mistake | What `aslang check` says |
+| Mistake | What `tmk check` says |
 |---|---|
 | Off-by-one in the transfer | `E0204` postcondition may not hold, with the inputs and the wrong `result` |
 | A missing bound on a sum | `E0205` value may not be a valid `Cents`, with inputs whose sum exceeds the limit |
@@ -81,46 +85,46 @@ Each line below is a test in `compiler/tests/cli.rs`.
 Array workloads written the same way in eight languages, each built with its usual release
 settings (full table, flags and caveats: [`bench/arrays/RESULTS.md`](bench/arrays/RESULTS.md)):
 
-| Workload | AS | C | Rust | Go | Java | JavaScript | Python |
+| Workload | Touchmark | C | Rust | Go | Java | JavaScript | Python |
 |---|---|---|---|---|---|---|---|
 | Sieve, n = 50M | **304 ms** | 308 | 316 | 315 | 358 | 446 | 11,749 |
 | Matrix multiply 400×400 | 52 ms | **50** | 53 | 113 | 157 | 173 | 5,667 |
 | Quicksort, 5M integers | **533 ms** | 556 | 567 | 579 | 667 | 1,138 | 13,958 |
 | Sum of 10M integers ×20 | 199 ms | 209 | **179** | 257 | 285 | 381 | 3,835 |
 
-AS runs in the same band as C and Rust (noise here is about 5%) and 2-100 times faster than
-Go, Java, JavaScript and Python on these programs. The difference is what is known: in the AS
+Touchmark runs in the same band as C and Rust (noise here is about 5%) and 2-100 times faster than
+Go, Java, JavaScript and Python on these programs. The difference is what is known: in the Touchmark
 programs every array index and every arithmetic operation is proved safe before compiling, so
 the binary has no bounds or overflow checks at all. C checks nothing; Rust checks bounds at run
 time and silently wraps on overflow in release builds.
 
 Three things make proved code fast rather than merely safe: proved checks are deleted, proved
 facts are handed to the C optimiser, and proved-safe divisions use cheaper 32-bit or unsigned
-instructions. On the integer benchmarks in `bench/perf/` that last one lets AS beat Rust on
+instructions. On the integer benchmarks in `bench/perf/` that last one lets Touchmark beat Rust on
 `primes` (665 ms against 673).
 
 Proofs used to cost source length, because every contract a proof needed had to be written.
 The compiler now infers loop invariants, and the `requires` and `ensures` of private functions
 (from their call sites and returns), and proves what it infers like hand-written contracts.
-Across the seven benchmark programs, AS source shrank by a third (2,185 to 1,437 tokens) and
+Across the seven benchmark programs, Touchmark source shrank by a third (2,185 to 1,438 tokens) and
 one hand-written invariant is left in total. `primes` and `isqrt` are now shorter than the Rust
 versions, and all seven together are within 18% of Rust (`bench/arrays/RESULTS.md`).
 
 ## Built for models as well as people
 
-- **The whole language fits in 3,212 tokens.** [`llms.txt`](llms.txt) is the complete
-  reference; a model that reads it can write AS.
-- **Short.** On four small programs with identical proved contracts, AS takes 230 tokens against
+- **The whole language fits in 3,225 tokens.** [`llms.txt`](llms.txt) is the complete
+  reference; a model that reads it can write Touchmark.
+- **Short.** On four small programs with identical proved contracts, Touchmark takes 230 tokens against
   Dafny's 249, Verus's 266 and Vera's 447 (`bench/tokens/`).
 - **Errors are instructions.** Every diagnostic has a stable code, a fix, and a counterexample
-  where there is one, in text or `--json`; `aslang explain E0201` explains any code.
+  where there is one, in text or `--json`; `tmk explain E0201` explains any code.
 - **Contracts you do not have to write.** Loop invariants, and the contracts of private
   functions, are inferred and proved automatically, and callers of a small private helper see
-  exactly what it computes ([`examples/grid.as`](examples/grid.as) indexes through
+  exactly what it computes ([`examples/grid.tmk`](examples/grid.tmk) indexes through
   `at(clamp(...), clamp(...), w)` with every index proved and no contract written).
   `--show-inferred` shows what was inferred. You write contracts for the public API and for
   the properties you care about.
-- **Contracts a reviewer can check at a glance.** `aslang examples` prints inputs and
+- **Contracts a reviewer can check at a glance.** `tmk examples` prints inputs and
   results a contract allows, forbids and rejects, and says whether it decides the result.
 - **A definite finish line.** `N checks proved, 0 kept at run time` tells an agent it is done.
 - **Greppable.** Effects are called by name (`io.print`), variant names are global, there are no
@@ -132,12 +136,12 @@ Requires Rust (to build the compiler), a C compiler (gcc or clang) and `z3` on `
 
 ```sh
 cargo build --release
-./target/release/aslang check examples/ledger.as     # prove
-./target/release/aslang run examples/ledger.as       # prove, compile, run
-./target/release/aslang lock examples/ledger.as      # pin public contracts in aslang.lock
-./target/release/aslang examples examples/ledger.as  # what each contract allows and forbids
-./target/release/aslang check --json examples/bugs/midpoint.as
-./target/release/aslang explain E0301
+./target/release/tmk check examples/ledger.tmk     # prove
+./target/release/tmk run examples/ledger.tmk       # prove, compile, run
+./target/release/tmk lock examples/ledger.tmk      # pin public contracts in touchplate.lock
+./target/release/tmk examples examples/ledger.tmk  # what each contract allows and forbids
+./target/release/tmk check --json examples/bugs/midpoint.tmk
+./target/release/tmk explain E0301
 cargo test                                            # end-to-end tests
 ```
 
@@ -155,8 +159,8 @@ design rule, and the stop rules are in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Where this came from
 
-AS started in 2021 as a small interpreted language; that prototype is in `legacy/`. In 2026 it
-was redesigned from a research study of what a new language could fix now that agents write
+Touchmark started in 2021 as AS, a small interpreted language; that prototype is in `legacy/`.
+In 2026 it was redesigned from a research study of what a new language could fix now that agents write
 most code: [`reports/New programming language pain points.md`](reports/New%20programming%20language%20pain%20points.md),
 [`why_llm_languages_flopped.md`](research_notes/New%20programming%20language%20pain%20points/why_llm_languages_flopped.md),
 and a hands-on test of the closest rival, [`phase0/lemmascript_assessment.md`](phase0/lemmascript_assessment.md).

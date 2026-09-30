@@ -1,4 +1,4 @@
-//! The contract lock. `aslang lock` pins every public function's signature, contract and
+//! The contract lock. `tmk lock` pins every public function's signature, contract and
 //! effects, plus the definitions of the types they use. Later checks must refine the pin:
 //! a weaker contract, a new effect or a changed type fails until a human re-pins it.
 
@@ -62,7 +62,7 @@ pub fn check_against(prog: &Program, src: &Source, m: &Module, pinned: &Value, o
             let def = def.as_str().unwrap_or_default();
             match now.get(name) {
                 Some(d) if d == def => {}
-                Some(d) => diags.push(Diagnostic::error("E0305", find_decl(src, name), format!("the pinned type `{name}` changed")).with_note(format!("pinned:   {def}")).with_note(format!("proposed: {d}")).with_fix("if the change is intended, have an owner review it and run `aslang lock` again")),
+                Some(d) => diags.push(Diagnostic::error("E0305", find_decl(src, name), format!("the pinned type `{name}` changed")).with_note(format!("pinned:   {def}")).with_note(format!("proposed: {d}")).with_fix("if the change is intended, have an owner review it and run `tmk lock` again")),
                 None => diags.push(Diagnostic::error("E0305", Default::default(), format!("the pinned type `{name}` was removed"))),
             }
         }
@@ -72,12 +72,12 @@ pub fn check_against(prog: &Program, src: &Source, m: &Module, pinned: &Value, o
     let mut order = vec![];
     for (name, entry) in &fns {
         let Some(f) = m.funcs.iter().find(|f| &f.name == name) else {
-            diags.push(Diagnostic::error("E0304", Default::default(), format!("the pinned function `{name}` was removed")).with_fix("restore it, or have an owner approve the removal and run `aslang lock`"));
+            diags.push(Diagnostic::error("E0304", Default::default(), format!("the pinned function `{name}` was removed")).with_fix("restore it, or have an owner approve the removal and run `tmk lock`"));
             continue;
         };
         let sig = entry["signature"].as_str().unwrap_or_default();
         if sig != f.sig_src {
-            diags.push(Diagnostic::error("E0304", f.sig_span, format!("the signature of `{name}` changed")).with_note(format!("pinned:   {sig}")).with_note(format!("proposed: {}", f.sig_src)).with_fix("if the change is intended, have an owner review it and run `aslang lock` again"));
+            diags.push(Diagnostic::error("E0304", f.sig_span, format!("the signature of `{name}` changed")).with_note(format!("pinned:   {sig}")).with_note(format!("proposed: {}", f.sig_src)).with_fix("if the change is intended, have an owner review it and run `tmk lock` again"));
             continue;
         }
         let old_uses = strings(&entry["uses"]);
@@ -86,7 +86,7 @@ pub fn check_against(prog: &Program, src: &Source, m: &Module, pinned: &Value, o
             diags.push(
                 Diagnostic::error("E0303", f.sig_span, format!("`{name}` gained the effect(s) {}", added.iter().map(|a| format!("`{a}`")).collect::<Vec<_>>().join(", ")))
                     .with_note(format!("pinned effects: {}", if old_uses.is_empty() { "none (pure)".into() } else { old_uses.join(", ") }))
-                    .with_fix("remove the new effect, or have an owner approve it and run `aslang lock`"),
+                    .with_fix("remove the new effect, or have an owner approve it and run `tmk lock`"),
             );
         }
         let parse = |xs: Vec<String>| -> Option<Vec<crate::ast::Expr>> { xs.iter().map(|x| crate::parser::parse_expr(crate::lexer::lex(x).ok()?).ok()).collect() };
@@ -103,7 +103,7 @@ pub fn check_against(prog: &Program, src: &Source, m: &Module, pinned: &Value, o
     for ((name, oreq, oens), typed) in order.into_iter().zip(typed) {
         let f = m2.funcs.iter().find(|f| f.name == name).unwrap();
         let Some((req, ens)) = typed else {
-            diags.push(Diagnostic::error("E0304", f.sig_span, format!("the pinned contract of `{name}` no longer type-checks")).with_fix("have an owner review the change and run `aslang lock` again"));
+            diags.push(Diagnostic::error("E0304", f.sig_span, format!("the pinned contract of `{name}` no longer type-checks")).with_fix("have an owner review the change and run `tmk lock` again"));
             continue;
         };
         let Some((pre, post)) = check_refinement(&m2, src, f, &req, &ens, opts) else {
@@ -128,7 +128,7 @@ pub fn check_against(prog: &Program, src: &Source, m: &Module, pinned: &Value, o
                 }
                 d = d
                     .with_note("the counterexample is a call that was allowed before and is rejected now")
-                    .with_fix("keep the pinned precondition, or have an owner approve the change and run `aslang lock`");
+                    .with_fix("keep the pinned precondition, or have an owner approve the change and run `tmk lock`");
                 d.counterexample = ce;
                 diags.push(d);
             }
@@ -146,20 +146,20 @@ pub fn check_against(prog: &Program, src: &Source, m: &Module, pinned: &Value, o
                     d = d.with_note(note);
                 }
                 d = d
-                    .with_fix("restore the pinned guarantee; a weaker contract needs an owner-approved `aslang lock`");
+                    .with_fix("restore the pinned guarantee; a weaker contract needs an owner-approved `tmk lock`");
                 d.counterexample = ce;
                 diags.push(d);
             }
             Verdict::Unknown => diags.push(Diagnostic::warning("W0250", f.sig_span, format!("could not decide whether the contract of `{name}` still refines the pin"))),
             Verdict::Proved => {
                 if pre_ok && (show(&oens) != show(&f.ensures_src) || show(&oreq) != show(&f.requires_src)) {
-                    notes.push(format!("`{name}`: contract changed and still refines the pin; run `aslang lock` to pin the stronger version"));
+                    notes.push(format!("`{name}`: contract changed and still refines the pin; run `tmk lock` to pin the stronger version"));
                 }
             }
         }
     }
     for f in m.funcs.iter().filter(|f| f.is_pub && !fns.contains_key(&f.name)) {
-        notes.push(format!("`{}` is public but not pinned yet; run `aslang lock`", f.name));
+        notes.push(format!("`{}` is public but not pinned yet; run `tmk lock`", f.name));
     }
     (diags, notes)
 }

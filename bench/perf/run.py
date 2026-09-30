@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build each benchmark as AS, Rust -O, and Rust -O with overflow checks; check that the
+"""Build each benchmark as Touchmark, Rust -O, and Rust -O with overflow checks; check that the
 outputs agree; print median wall time over several runs as a Markdown table."""
 
 import os
@@ -10,7 +10,7 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ASLANG = os.environ.get("ASLANG", os.path.join(HERE, "..", "..", "target", "release", "aslang"))
+TMK = os.environ.get("TMK", os.path.join(HERE, "..", "..", "target", "release", "tmk"))
 RUNS = int(os.environ.get("RUNS", "5"))
 BENCHES = ["primes", "collatz", "isqrt"]
 
@@ -33,11 +33,11 @@ def timed(binary):
 
 def main():
     tmp = tempfile.mkdtemp()
-    print(f"| benchmark | AS (checks proved) | Rust -O (overflow wraps silently) | Rust -O + overflow checks | output |")
+    print(f"| benchmark | Touchmark (checks proved) | Rust -O (overflow wraps silently) | Rust -O + overflow checks | output |")
     print("|---|---|---|---|---|")
     for b in BENCHES:
         src = os.path.join(HERE, b)
-        r = sh(ASLANG, "build", src + ".as", "-o", os.path.join(tmp, b + "_as"))
+        r = sh(TMK, "build", src + ".tmk", "-o", os.path.join(tmp, b + "_tmk"))
         verdict = r.stderr.strip().splitlines()[-1]
         sh("rustc", "-O", "-o", os.path.join(tmp, b + "_rs"), src + ".rs")
         sh("rustc", "-O", "-C", "overflow-checks=on", "-o", os.path.join(tmp, b + "_rschk"), src + ".rs")

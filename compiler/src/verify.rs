@@ -100,7 +100,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { z3: std::env::var("ASLANG_Z3").unwrap_or_else(|_| "z3".into()), timeout_ms: 2000, infer: true }
+        Options { z3: std::env::var("TMK_Z3").unwrap_or_else(|_| "z3".into()), timeout_ms: 2000, infer: true }
     }
 }
 
@@ -334,7 +334,7 @@ fn verify_funcs(m: &Module, src: &Source, opts: &Options, pre: &str, contracts: 
             };
             let mut one = Report::default();
             fv.collect(answers, &mut one);
-            if std::env::var("ASLANG_TRACE").is_ok() {
+            if std::env::var("TMK_TRACE").is_ok() {
                 let n: usize = fv.inferred.iter().map(|(_, v)| v.len()).sum();
                 eprintln!("[final] {} attempt {attempt}: {n} inferred, {} failed inferred, {} failed contracts, proved {} unknown {} refuted {} in {} ms; failed: {:?}", f.name, one.failed_inferred.len(), one.failed_contracts.len(), one.proved, one.runtime, one.refuted, t0.elapsed().as_millis(), one.failed_inferred.iter().map(|(_, t)| t.clone()).chain(one.failed_contracts.iter().map(|(_, t)| t.clone())).collect::<Vec<_>>());
             }
@@ -358,7 +358,7 @@ fn verify_funcs(m: &Module, src: &Source, opts: &Options, pre: &str, contracts: 
         warm_all = if warm_start { Some(warm) } else { None };
     }
     if rep.solver_missing {
-        rep.diags.push(Diagnostic::warning("W0251", Span::default(), format!("the SMT solver `{}` was not found, so nothing was proved", opts.z3)).with_fix("install Z3 or set ASLANG_Z3 to its path; until then every check is kept at run time"));
+        rep.diags.push(Diagnostic::warning("W0251", Span::default(), format!("the SMT solver `{}` was not found, so nothing was proved", opts.z3)).with_fix("install Z3 or set TMK_Z3 to its path; until then every check is kept at run time"));
     }
     rep
 }
@@ -438,7 +438,7 @@ fn infer_contracts(m: &Module, src: &Source, opts: &Options, pre: &str, skip: &H
     }
     let mut dirty: HashSet<usize> = (0..n).filter(|f| cs.contains_key(f) || callees[*f].iter().any(|g| cs.contains_key(g))).collect();
     let mut warm = HashMap::new();
-    let trace = std::env::var("ASLANG_TRACE").is_ok();
+    let trace = std::env::var("TMK_TRACE").is_ok();
     let t0 = std::time::Instant::now();
     let mut last_found = HashMap::new();
     for round in 0..20 {
@@ -551,7 +551,7 @@ const VALID_CAP_MS: u64 = 3_000;
 /// are returned; callers treat the missing ones as "not proved".
 fn run_z3_capped(z3: &str, script: &str, cap_ms: Option<u64>) -> Option<Vec<SExp>> {
     let t0 = std::time::Instant::now();
-    if let Ok(dir) = std::env::var("ASLANG_DUMP") {
+    if let Ok(dir) = std::env::var("TMK_DUMP") {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let _ = std::fs::write(format!("{dir}/q{n}.smt2"), script);
@@ -560,7 +560,7 @@ fn run_z3_capped(z3: &str, script: &str, cap_ms: Option<u64>) -> Option<Vec<SExp
         None => run_z3_inner(z3, script),
         Some(cap) => run_z3_until(z3, script, cap),
     };
-    if std::env::var("ASLANG_TRACE").is_ok() {
+    if std::env::var("TMK_TRACE").is_ok() {
         eprintln!("[z3] {} bytes, {} ms, ok={}", script.len(), t0.elapsed().as_millis(), r.is_some());
     }
     r
@@ -1495,7 +1495,7 @@ impl<'a> Fv<'a> {
             }
         }
         let t0 = std::time::Instant::now();
-        let trace = std::env::var("ASLANG_TRACE").is_ok();
+        let trace = std::env::var("TMK_TRACE").is_ok();
         if trace {
             eprintln!("[loop] start {:?} sandbox={} elapsed {} ms", span, self.sandbox, self.started.elapsed().as_millis());
         }
@@ -1923,7 +1923,7 @@ fn show_array(data: &SExp, len: &SExp, names: &HashMap<String, (Option<Vec<Strin
     format!("[{}]", shown.join(", "))
 }
 
-/// Render a model value in AS syntax.
+/// Render a model value in Touchmark syntax.
 fn pretty(m: &Module, e: &SExp) -> String {
     let mut names: HashMap<String, (Option<Vec<String>>, String)> = HashMap::new();
     for t in datatypes(m) {

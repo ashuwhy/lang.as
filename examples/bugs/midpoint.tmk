@@ -1,5 +1,5 @@
 // The binary-search midpoint bug that sat in Java's standard library for nine years
-// (Arrays.binarySearch, fixed in 2006). `aslang check` rejects it with a counterexample.
+// (Arrays.binarySearch, fixed in 2006). `tmk check` rejects it with a counterexample.
 pub fn midpoint(lo: int, hi: int) -> int
   requires 0 <= lo && lo <= hi
   ensures lo <= result && result <= hi

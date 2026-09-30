@@ -1,18 +1,18 @@
-# AS language reference (v0.2)
+# Touchmark language reference (v0.2)
 
-> AS is a compiled, memory-safe language. Functions carry contracts that an SMT solver proves
+> Touchmark is a compiled, memory-safe language. Functions carry contracts that an SMT solver proves
 > at compile time; proved checks cost nothing at run time. This file is the complete reference
-> for what the current compiler accepts. Read it before writing AS.
+> for what the current compiler accepts. Read it before writing Touchmark.
 
 ## Workflow
 
-1. Write `file.as`.
-2. Run `aslang check file.as --json`. Fix every error; each has a `fix` and often a
-   `counterexample` (concrete inputs that break the check). `aslang explain <code>` explains any code.
+1. Write `file.tmk`.
+2. Run `tmk check file.tmk --json`. Fix every error; each has a `fix` and often a
+   `counterexample` (concrete inputs that break the check). `tmk explain <code>` explains any code.
 3. Done when it prints `ok ... N checks proved, 0 kept at run time`. Do not keep editing code that
    is proved.
-4. `aslang run file.as` builds a native binary and runs it; `aslang build file.as -o out` keeps it.
-5. `aslang lock file.as` pins public contracts in `aslang.lock`. Never weaken a pinned contract to
+4. `tmk run file.tmk` builds a native binary and runs it; `tmk build file.tmk -o out` keeps it.
+5. `tmk lock file.tmk` pins public contracts in `touchplate.lock`. Never weaken a pinned contract to
    make a check pass: fix the code instead. Weakening is an error (E0301) until a human re-pins.
 
 ## Lexical rules
@@ -40,7 +40,7 @@
 
 There is no null, no implicit conversion, no exceptions, and no references. Assignment copies.
 
-```as
+```tmk
 type Cents = int where 0 <= it && it <= 1_000_000_000_000
 type Account = { id: int, balance: Cents, frozen: bool }
 enum TransferError { Frozen, Insufficient(short: Cents) }
@@ -48,7 +48,7 @@ enum TransferError { Frozen, Insufficient(short: Cents) }
 
 ## Functions
 
-```as
+```tmk
 pub fn name(a: int, b: Account) -> int
   requires a >= 0            // caller must guarantee (checked at every call site)
   ensures result >= a        // function guarantees; `result` is the return value
@@ -58,7 +58,7 @@ pub fn name(a: int, b: Account) -> int
 }
 ```
 
-- `pub` marks a function as part of the module's contract (pinned by `aslang lock`).
+- `pub` marks a function as part of the module's contract (pinned by `tmk lock`).
 - A private function (no `pub`) may omit its contracts: the compiler infers `requires` from
   its call sites (bounds, lengths, relations between parameters, element ranges) and `ensures`
   from its returns, then proves them like written ones. A small private helper with no loops
@@ -75,7 +75,7 @@ pub fn name(a: int, b: Account) -> int
 
 ## Statements and expressions
 
-```as
+```tmk
 let x = 1               // immutable binding; type inferred
 let y: Cents = 5        // annotated
 var i = 0               // mutable local
@@ -135,12 +135,12 @@ a.len                                  // length
   are all that is known. The compiler infers simple invariants itself (ranges of counters,
   accumulators like `s <= i * 1_000`, values kept in range by `%`, element ranges of arrays), so
   write an `invariant` only for what it cannot guess: the property you actually care about, such
-  as `forall i in 0..lo: a[i] < key` or `2 * total == i * (i + 1)`. `aslang check
+  as `forall i in 0..lo: a[i] < key` or `2 * total == i * (i + 1)`. `tmk check
   --show-inferred` lists what was inferred. Do not add invariants the compiler already infers.
-- `aslang examples file.as [--fn name]` shows what each contract means: an allowed call and
+- `tmk examples file.tmk [--fn name]` shows what each contract means: an allowed call and
   result, results it forbids, inputs each `requires` rejects, and either `decided` (every
   input has exactly one allowed result) or `open` (two allowed results for the same input).
-  An `open` result you did not intend means an `ensures` is missing. `aslang lock` notes
+  An `open` result you did not intend means an `ensures` is missing. `tmk lock` notes
   every public contract it pins that is `open`.
 - Verdicts: proved (no run-time cost), refuted (compile error with a counterexample), unknown
   (warning W0250; a run-time check is kept). `--proved` rejects unknowns.
@@ -149,7 +149,7 @@ a.len                                  // length
 
 ## Complete example
 
-```as
+```tmk
 type Cents = int where 0 <= it && it <= 1_000_000_000_000
 type Account = { id: int, balance: Cents, frozen: bool }
 type Moved = { from: Account, to: Account }

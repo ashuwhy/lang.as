@@ -1,5 +1,5 @@
 // Longest Collatz chain for a start below 3,000,000.
-// AS will not let `3 * x + 1` overflow silently, so the guard below is required.
+// Touchmark will not let `3 * x + 1` overflow silently, so the guard below is required.
 fn chain(start: int) -> int {
   var x = start
   var steps = 1

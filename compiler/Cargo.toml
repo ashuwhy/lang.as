@@ -1,13 +1,13 @@
 [package]
-name = "aslang"
+name = "touchmark"
 version = "0.1.0"
 edition = "2021"
 authors = ["Ashutosh Sharma <ashutoshsharmawhy@gmail.com>"]
-description = "Compiler for AS, a safe native language whose code carries machine-checked contracts"
+description = "Compiler for Touchmark, a safe native language whose code carries machine-checked contracts"
 license = "MIT"
 
 [[bin]]
-name = "aslang"
+name = "tmk"
 path = "src/main.rs"
 
 [dependencies]

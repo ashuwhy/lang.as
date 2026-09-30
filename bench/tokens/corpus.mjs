@@ -3,7 +3,7 @@ import { encode as o200 } from "gpt-tokenizer/encoding/o200k_base";
 import llama3 from "llama3-tokenizer-js";
 const q = (await import("@lenml/tokenizer-qwen2_5")).fromPreTrained();
 const dir = "corpus"; const tasks = ["abs", "fact", "div", "fizz"];
-const langs = [["AS draft", "as"], ["Vera", "vera"], ["Dafny", "dfy"], ["Verus", "verus.rs"], ["Python", "py"], ["TypeScript", "ts"], ["Rust", "rs"], ["Go", "go"]];
+const langs = [["Touchmark draft", "tmk"], ["Vera", "vera"], ["Dafny", "dfy"], ["Verus", "verus.rs"], ["Python", "py"], ["TypeScript", "ts"], ["Rust", "rs"], ["Go", "go"]];
 console.log("language".padEnd(12) + tasks.map(t => t.padStart(6)).join("") + "  total(o200k)  llama3  qwen2.5  contracts?");
 for (const [name, ext] of langs) {
   const src = tasks.map(t => fs.readFileSync(`${dir}/${t}.${ext}`, "utf8"));

@@ -1,21 +1,21 @@
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
 
-use aslang::diag::{Diagnostic, Source};
-use aslang::verify::{Options, Report};
+use touchmark::diag::{Diagnostic, Source};
+use touchmark::verify::{Options, Report};
 use serde_json::json;
 
-const USAGE: &str = "aslang - compiler for AS
+const USAGE: &str = "tmk - compiler for Touchmark
 
 usage:
-  aslang check <file.as>            type-check, verify, and compare with aslang.lock
-  aslang build <file.as> [-o out]   check, then compile to a native binary
-  aslang run <file.as>              build and run
-  aslang lock <file.as>             pin the public contracts in aslang.lock
-  aslang emit-c <file.as>           print the generated C
-  aslang emit-smt <file.as>         print the SMT-LIB queries
-  aslang examples <file.as>         show inputs and results each contract allows and forbids
-  aslang explain <code>             explain a diagnostic, e.g. `aslang explain E0201`
+  tmk check <file.tmk>            type-check, verify, and compare with touchplate.lock
+  tmk build <file.tmk> [-o out]   check, then compile to a native binary
+  tmk run <file.tmk>              build and run
+  tmk lock <file.tmk>             pin the public contracts in touchplate.lock
+  tmk emit-c <file.tmk>           print the generated C
+  tmk emit-smt <file.tmk>         print the SMT-LIB queries
+  tmk examples <file.tmk>         show inputs and results each contract allows and forbids
+  tmk explain <code>              explain a diagnostic, e.g. `tmk explain E0201`
 
 options:
   --json          machine-readable output
@@ -59,7 +59,7 @@ fn parse_args() -> Args {
                 exit(0)
             }
             "--version" => {
-                println!("aslang {}", env!("CARGO_PKG_VERSION"));
+                println!("tmk {}", env!("CARGO_PKG_VERSION"));
                 exit(0)
             }
             _ if a.cmd.is_empty() => a.cmd = x,
@@ -82,11 +82,11 @@ struct Outcome {
     diags: Vec<Diagnostic>,
     notes: Vec<String>,
     report: Option<Report>,
-    module: Option<aslang::tir::Module>,
+    module: Option<touchmark::tir::Module>,
 }
 
 fn lock_path(file: &str) -> PathBuf {
-    Path::new(file).parent().map(|p| p.join("aslang.lock")).unwrap_or_else(|| PathBuf::from("aslang.lock"))
+    Path::new(file).parent().map(|p| p.join("touchplate.lock")).unwrap_or_else(|| PathBuf::from("touchplate.lock"))
 }
 
 fn file_key(file: &str) -> String {
@@ -106,28 +106,28 @@ fn analyse(a: &Args, with_lock: bool) -> Outcome {
     });
     let src = Source::new(a.file.clone(), text);
     let mut out = Outcome { src, diags: vec![], notes: vec![], report: None, module: None };
-    let toks = match aslang::lexer::lex(&out.src.text) {
+    let toks = match touchmark::lexer::lex(&out.src.text) {
         Ok(t) => t,
         Err(d) => {
             out.diags.push(d);
             return out;
         }
     };
-    let prog = match aslang::parser::parse(toks) {
+    let prog = match touchmark::parser::parse(toks) {
         Ok(p) => p,
         Err(d) => {
             out.diags.push(d);
             return out;
         }
     };
-    let (m, diags) = aslang::check::check_program(&prog, &out.src);
+    let (m, diags) = touchmark::check::check_program(&prog, &out.src);
     out.diags = diags;
     if out.diags.iter().any(|d| d.is_error()) {
         return out;
     }
     let opts = Options { timeout_ms: a.timeout, infer: a.infer, ..Default::default() };
     if a.verify {
-        let rep = aslang::verify::verify(&m, &out.src, &opts);
+        let rep = touchmark::verify::verify(&m, &out.src, &opts);
         out.diags.extend(rep.diags.iter().cloned());
         if a.proved && rep.runtime > 0 {
             out.diags.push(Diagnostic::error("E0250", Default::default(), format!("--proved: {} check(s) could not be proved", rep.runtime)));
@@ -135,7 +135,7 @@ fn analyse(a: &Args, with_lock: bool) -> Outcome {
         out.report = Some(rep);
         if with_lock {
             if let Some(pinned) = read_lock(&a.file) {
-                let (d, n) = aslang::lock::check_against(&prog, &out.src, &m, &pinned, &opts);
+                let (d, n) = touchmark::lock::check_against(&prog, &out.src, &m, &pinned, &opts);
                 out.diags.extend(d);
                 out.notes.extend(n);
             }
@@ -211,25 +211,25 @@ fn report(a: &Args, o: &Outcome, extra: serde_json::Value) -> bool {
 fn build(a: &Args, o: &Outcome, out: &Path) -> Result<(), String> {
     let m = o.module.as_ref().unwrap();
     if !m.funcs.iter().any(|f| f.name == "main") {
-        return Err("no `fn main()` to build; `aslang check` verifies a library".into());
+        return Err("no `fn main()` to build; `tmk check` verifies a library".into());
     }
     let empty = Default::default();
     let verdicts = o.report.as_ref().map(|r| &r.verdicts).unwrap_or(&empty);
     let no_pre = Default::default();
-    let c = aslang::codegen::generate(m, &o.src, verdicts, o.report.as_ref().map(|r| &r.inferred_pre).unwrap_or(&no_pre));
-    let cfile = std::env::temp_dir().join(format!("aslang_{}_{}.c", std::process::id(), file_key(&a.file)));
+    let c = touchmark::codegen::generate(m, &o.src, verdicts, o.report.as_ref().map(|r| &r.inferred_pre).unwrap_or(&no_pre));
+    let cfile = std::env::temp_dir().join(format!("tmk_{}_{}.c", std::process::id(), file_key(&a.file)));
     std::fs::write(&cfile, c).map_err(|e| e.to_string())?;
     // Any C compiler with GNU C extensions works; set CC to choose (gcc and clang are both tested).
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
     let status = Command::new(&cc).args(["-O2", "-std=gnu11", "-w", "-o"]).arg(out).arg(&cfile).status().map_err(|e| format!("cannot run the C compiler `{cc}`: {e}"))?;
     let _ = std::fs::remove_file(&cfile);
     if !status.success() {
-        return Err(format!("the C compiler failed (this is a compiler bug; `aslang emit-c {}` shows the code)", a.file));
+        return Err(format!("the C compiler failed (this is a compiler bug; `tmk emit-c {}` shows the code)", a.file));
     }
     Ok(())
 }
 
-fn render_examples(e: &aslang::verify::Examples) -> String {
+fn render_examples(e: &touchmark::verify::Examples) -> String {
     let call = |args: &[(String, String)]| format!("{}({})", e.func, args.iter().map(|(n, v)| format!("{n}: {v}")).collect::<Vec<_>>().join(", "));
     let mut s = format!("{}\n", e.func);
     if let Some((a, r)) = &e.allowed {
@@ -255,11 +255,11 @@ fn render_examples(e: &aslang::verify::Examples) -> String {
 fn main() {
     let a = parse_args();
     match a.cmd.as_str() {
-        "explain" => match aslang::explain::explain(&a.file) {
+        "explain" => match touchmark::explain::explain(&a.file) {
             Some(t) => print!("{t}"),
             None => {
                 eprintln!("no such code `{}`; codes are:", a.file);
-                for e in aslang::explain::ENTRIES {
+                for e in touchmark::explain::ENTRIES {
                     eprintln!("  {}  {}", e.code, e.title);
                 }
                 exit(2)
@@ -276,7 +276,7 @@ fn main() {
                 exit(1)
             };
             let opts = Options { timeout_ms: a.timeout, infer: a.infer, ..Default::default() };
-            let exs = aslang::verify::examples(m, &o.src, &opts, r, a.only.as_deref());
+            let exs = touchmark::verify::examples(m, &o.src, &opts, r, a.only.as_deref());
             if a.json {
                 let pairs = |v: &[(String, String)]| v.iter().map(|(n, x)| json!({"name": n, "value": x})).collect::<Vec<_>>();
                 let out: Vec<_> = exs.iter().map(|e| json!({
@@ -313,7 +313,7 @@ fn main() {
             let empty = Default::default();
             let v = o.report.as_ref().map(|r| &r.verdicts).unwrap_or(&empty);
             let no_pre = Default::default();
-            print!("{}", aslang::codegen::generate(o.module.as_ref().unwrap(), &o.src, v, o.report.as_ref().map(|r| &r.inferred_pre).unwrap_or(&no_pre)));
+            print!("{}", touchmark::codegen::generate(o.module.as_ref().unwrap(), &o.src, v, o.report.as_ref().map(|r| &r.inferred_pre).unwrap_or(&no_pre)));
         }
         "build" | "run" => {
             let o = analyse(&a, true);
@@ -324,7 +324,7 @@ fn main() {
             }
             let out = match (&a.cmd[..], &a.out) {
                 (_, Some(p)) => PathBuf::from(p),
-                ("run", None) => std::env::temp_dir().join(format!("aslang_run_{}", std::process::id())),
+                ("run", None) => std::env::temp_dir().join(format!("tmk_run_{}", std::process::id())),
                 _ => PathBuf::from(Path::new(&a.file).file_stem().unwrap()),
             };
             if let Err(e) = build(&a, &o, &out) {
@@ -352,7 +352,7 @@ fn main() {
             }
             let path = lock_path(&a.file);
             let mut root: serde_json::Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({ "version": 1, "files": {} }));
-            root["files"][file_key(&a.file)] = aslang::lock::snapshot(o.module.as_ref().unwrap());
+            root["files"][file_key(&a.file)] = touchmark::lock::snapshot(o.module.as_ref().unwrap());
             std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap() + "\n").unwrap_or_else(|e| {
                 eprintln!("cannot write {}: {e}", path.display());
                 exit(1)
@@ -363,8 +363,8 @@ fn main() {
             let mut open = vec![];
             if let Some(r) = &o.report {
                 let opts = Options { timeout_ms: a.timeout, infer: a.infer, ..Default::default() };
-                for f in m.funcs.iter().filter(|f| f.is_pub && f.ret != aslang::tir::Ty::Unit) {
-                    if let Some(e) = aslang::verify::examples(m, &o.src, &opts, r, Some(&f.name)).pop() {
+                for f in m.funcs.iter().filter(|f| f.is_pub && f.ret != touchmark::tir::Ty::Unit) {
+                    if let Some(e) = touchmark::verify::examples(m, &o.src, &opts, r, Some(&f.name)).pop() {
                         if let Some((args, r1, r2)) = e.open {
                             let call = format!("{}({})", e.func, args.iter().map(|(n, v)| format!("{n}: {v}")).collect::<Vec<_>>().join(", "));
                             open.push(json!({ "function": e.func, "call": call, "results": [r1, r2] }));
@@ -376,7 +376,7 @@ fn main() {
             if !a.json {
                 eprintln!("pinned {n} public function(s) in {}", path.display());
                 for x in &open {
-                    eprintln!("note: the pinned contract of `{}` does not decide its result: {} may return {} or {}; add an `ensures` if that is not intended (`aslang examples` shows more)", x["function"].as_str().unwrap_or(""), x["call"].as_str().unwrap_or(""), x["results"][0].as_str().unwrap_or(""), x["results"][1].as_str().unwrap_or(""));
+                    eprintln!("note: the pinned contract of `{}` does not decide its result: {} may return {} or {}; add an `ensures` if that is not intended (`tmk examples` shows more)", x["function"].as_str().unwrap_or(""), x["call"].as_str().unwrap_or(""), x["results"][0].as_str().unwrap_or(""), x["results"][1].as_str().unwrap_or(""));
                 }
             }
         }

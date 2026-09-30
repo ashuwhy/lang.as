@@ -109,7 +109,26 @@ an input that now has two allowed results. `aslang lock` notes every public cont
 that is `open` (on `examples/arrays.as`: `sum` and `count_primes`, and `search`, which is open
 on purpose).
 
-Naming, for the owner to decide (asked 2026-09-30): GitHub's language bar comes from
+Renamed on 2026-09-30 (owner's decision): the language is **Touchmark**, files `.tmk`, CLI
+`tmk`, lock file `touchplate.lock`, crate `touchmark`, env vars `TMK_TRACE`, `TMK_DUMP`,
+`TMK_Z3`. The name is the silversmiths' touchmark, the maker's stamp vouching for a piece,
+recorded on the guild's touchplate. It was free on crates.io, npm and PyPI and unused by any
+language. The GitHub repository is still `lang.as`; renaming it is an owner action in the
+repository settings. The generated C still uses `as_`/`AS_ASSUME` prefixes internally.
+
+Rivals found during the naming search (all 2026, add to any competitor analysis): Aver
+(language "for AI to write and humans to review"; VM, Rust and Wasm output; verify blocks are
+tests, proofs by Lean export; 61 stars), Orthon ("LLM-native" language, design docs only),
+Warrant (protocol: "Humans state intent. Agents write the code. Evidence decides what ships";
+1 star), Sema (a Lisp with LLM primitives) and a "Sema" contracts-and-evidence governance tool
+for agents, Symbolon (a tiny "contract written as data" language), and many agent-verification
+tools named Surety, Prusik, Belay, Dokimos, Keptly, Kedge and Troth. The pitch "AI writes,
+humans review, proof decides" is now common; what is not common is a working native compiler
+that proves bounds and overflow, removes the checks, infers most of the proof, pins contracts
+with a semantic weakening check, and shows reviewers what a contract allows. The agent
+evaluation is what would show whether that matters.
+
+Naming, as it was put to the owner before the decision: GitHub's language bar comes from
 Linguist, which adds a language only after "at least 2000 files per extension ... indexed in
 the last year, excluding forks" (200 for one-file-per-repo extensions) across many repos, so
 it cannot be registered up front. Linguist already gives `.as` to ActionScript and AngelScript,
@@ -121,15 +140,16 @@ vouch and sworn are all taken on both registries).
 
 Next, in order:
 
-1. The name (owner's decision above); then rename the extension, CLI and docs in one commit.
+1. The agent evaluation (item 6 below, moved up): the rivals make the same pitch, so the claim
+   that Touchmark lowers escaped defects at similar token cost now has to be measured, against
+   Rust, Dafny and Aver on the same tasks.
 2. Faster inference (parallel solver calls per function; `matmul` takes about 9 s) and the
    nested element-range case above.
 3. Strings, arrays inside records and enums, recursive enums (heap values in general).
 4. Generics, modules, `?`, sized integers, termination of recursion; floats.
 5. More proof-driven optimisation (`restrict` from value semantics, narrowing proved-small
    integers), and benchmarks with floats and strings.
-6. The agent evaluation described in `docs/DESIGN.md` (AS vs Rust vs TypeScript on bug-prone
-   tasks; escaped defects and total agent tokens).
+6. (The agent evaluation moved to item 1.)
 7. Consider filing the LemmaScript vacuity issue drafted at the end of
    `phase0/lemmascript_assessment.md` (owner's decision).
 

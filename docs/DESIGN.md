@@ -1,6 +1,7 @@
-# AS: a fast, safe systems language whose code carries its own proof of intent
+# Touchmark: a fast, safe systems language whose code carries its own proof of intent
 
-*Working name AS, file extension `.as`, command `aslang`. Status: design for v0.1, with the
+*Name Touchmark (called AS until 2026-09-30), file extension `.tmk`, command `tmk`, lock file
+`touchplate.lock`. Status: design for v0.1, with the
 compiler under construction in `compiler/`. Nothing below is claimed as working unless the v0.1
 scope table says so. Evidence for each rule: `reports/New programming language pain points.md`
 and `research_notes/New programming language pain points/why_llm_languages_flopped.md`.*
@@ -16,7 +17,7 @@ context; what nobody can do cheaply is *trust* the result. Those languages optim
 writer, made code harder for the human reviewer (Vera removes variable names; Nanolang uses
 prefix syntax), measured themselves on saturated toy benchmarks, and found no users.
 
-AS is for teams where agents write the code and humans approve it. It is a compiled, native,
+Touchmark is for teams where agents write the code and humans approve it. It is a compiled, native,
 memory-safe language, competing with Rust, Go and Zig on safety and speed, with one thing none of
 them has: **the program states its intent, the compiler proves the code meets it, and an agent
 cannot quietly weaken it.** It is designed to be the cheapest language in which to reach
@@ -28,7 +29,7 @@ cannot quietly weaken it.** It is designed to be the cheapest language in which 
    variables own their values, assignment copies, and there are no references in the surface
    language. So there are no lifetimes, no aliasing bugs, no null, no use-after-free, and no data
    races by construction. Type-system complexity is what separates Dafny's 82% agent success
-   from Verus's 44% and Lean's 27% on the same tasks; AS keeps the type system Dafny-simple.
+   from Verus's 44% and Lean's 27% on the same tasks; Touchmark keeps the type system Dafny-simple.
 2. **Copies are free when nobody can see them.** Heap values (strings, arrays, maps, recursive
    enums, from v0.2) are reference-counted with Perceus-style precise drops and in-place reuse
    (Koka, Lean 4): updating a value whose count is one mutates it in place. Immutable values
@@ -46,9 +47,9 @@ cannot quietly weaken it.** It is designed to be the cheapest language in which 
    `decreases`. The spec language is the expression language. Nothing is mandatory: a function
    without contracts is pure, total over its parameter types, and still gets every derived
    obligation (overflow, bounds, division, exhaustive `match`). Vera's mandatory
-   `requires(true) ensures(true) effects(pure)` is the boilerplate AS refuses.
-5. **Contracts are pinned.** `aslang lock` records every public function's contract, effects and
-   signature in `aslang.lock`. Each later build proves the new contract *refines* the pinned
+   `requires(true) ensures(true) effects(pure)` is the boilerplate Touchmark refuses.
+5. **Contracts are pinned.** `tmk lock` records every public function's contract, effects and
+   signature in `touchplate.lock`. Each later build proves the new contract *refines* the pinned
    one: the old precondition implies the new one, and under the old precondition the new
    postcondition implies the old one. A weakening fails with an input the new contract allows
    and the old one forbids, and lands only through an approved lock change (CODEOWNERS). Two holes
@@ -87,7 +88,7 @@ cannot quietly weaken it.** It is designed to be the cheapest language in which 
     of the standard library and the diagnostic index fit in one reference of at most 25,000
     tokens, shipped as `llms.txt` and an agent skill; a feature that does not fit waits. Models
     write a new language well from one document; they fail on what is not in it. Compiled code
-    exposes a C ABI in both directions, so a verified AS module links into existing C, C++,
+    exposes a C ABI in both directions, so a verified Touchmark module links into existing C, C++,
     Rust, Go or Python programs as a static library and header, the way Zig entered through C.
     The solver interface is plain SMT-LIB text (Z3 today, cvc5 or a successor tomorrow), and the
     core calculus is small enough to mechanise in Lean.
@@ -107,7 +108,7 @@ measurement; each point is meant to be tested in the v0.2 evaluation.
    it into a compile error with the corrected call as the fix. Vera's answer, removing names,
    makes the code unreadable for the human who must approve it.
 4. **Errors that say what to do.** A stable code, the exact span, a fix and a counterexample
-   are cheaper than a paragraph of prose; `aslang explain` gives the rest on demand.
+   are cheaper than a paragraph of prose; `tmk explain` gives the rest on demand.
 5. **Edit-robust syntax.** Models edit by replacing exact text. One statement per line, no
    significant indentation, trailing commas allowed and no required semicolons keep edits
    local and diffs small.
@@ -116,7 +117,7 @@ measurement; each point is meant to be tested in the v0.2 evaluation.
 
 ## The language in one example
 
-```as
+```tmk
 type Cents = int where 0 <= it && it <= 1_000_000_000_000
 
 type Account = { id: int, balance: Cents, frozen: bool }
@@ -155,7 +156,7 @@ What the compiler does with it:
   with the fix "add `requires to.balance + amount <= 1_000_000_000_000`";
 - rejects `transfer(a, a, 30)` at the call site, because `requires from.id != to.id` fails;
 - pins the contract. If an agent later rewrites the first `ensures` as
-  `m.from.balance <= from.balance`, `aslang check` shows the pinned and proposed clauses and an
+  `m.from.balance <= from.balance`, `tmk check` shows the pinned and proposed clauses and an
   input the new contract allows and the old one forbids, and fails until the lock is approved.
 
 ## Semantics, briefly
@@ -175,11 +176,11 @@ What the compiler does with it:
 
 | Command | Does |
 |---|---|
-| `aslang check f.as` | Parse, type-check, effect-check, verify; compare with `aslang.lock` if present |
-| `aslang build f.as -o f` | `check`, then emit C and compile it with the system C compiler at `-O2` |
-| `aslang run f.as` | `build` to a temporary binary and run it |
-| `aslang lock f.as` | Pin the current contracts; refuses if any public contract is vacuous |
-| `aslang emit-c`, `aslang emit-smt` | Show the generated C or the SMT-LIB queries |
+| `tmk check f.tmk` | Parse, type-check, effect-check, verify; compare with `touchplate.lock` if present |
+| `tmk build f.tmk -o f` | `check`, then emit C and compile it with the system C compiler at `-O2` |
+| `tmk run f.tmk` | `build` to a temporary binary and run it |
+| `tmk lock f.tmk` | Pin the current contracts; refuses if any public contract is vacuous |
+| `tmk emit-c`, `tmk emit-smt` | Show the generated C or the SMT-LIB queries |
 | `--json` | Machine-readable diagnostics, verdicts and counterexamples for every command |
 
 The native backend emits C and hands it to `cc`, the route Lean 4, Koka and Nim use: it gets
@@ -200,15 +201,15 @@ from the same checked IR.
 | Effects (`uses`), `io.print` for `int`, `bool` and string literals | yes |
 | C backend to a native binary | yes |
 | Contract lock with refinement check and vacuity guard | yes |
-| Diagnostics as instructions, in text and JSON; `aslang explain` | yes |
+| Diagnostics as instructions, in text and JSON; `tmk explain` | yes |
 | Named arguments checked against parameter names | yes |
 | Proved facts passed to the C optimiser; proved-safe 32-bit and unsigned division | yes |
-| `llms.txt`: the complete reference (3,212 tokens at v0.2) | yes |
+| `llms.txt`: the complete reference (3,225 tokens at v0.2) | yes |
 | Arrays with proved bounds, reference counting, copy-on-write, last-use moves; `for` loops; `forall`/`exists` | done (v0.2) |
 | Loop-invariant inference (Houdini over templates; inferred invariants are re-proved) | done (v0.2) |
 | Contract inference for private functions (Houdini across the module: `requires` from call sites, `ensures` from returns; re-proved) | done (v0.2) |
 | Exact summaries of small private helpers (no loops, no recursion): callers see the value the body computes | done (v0.2) |
-| `aslang examples`: allowed, forbidden and rejected calls from solver models, and a proof of whether a contract decides the result | done (v0.2) |
+| `tmk examples`: allowed, forbidden and rejected calls from solver models, and a proof of whether a contract decides the result | done (v0.2) |
 | Strings, maps, arrays inside other values, recursive enums | v0.2/v0.3 |
 | Generics, modules, `?`, sized integers, recursion termination | v0.2 |
 | C ABI export (`.h` + static library) and import through `uses ffi` | v0.2 |
@@ -219,17 +220,28 @@ Limits of v0.1, stated so nobody over-reads it: correctness of recursive functio
 (termination of recursion is not yet proved), specs cannot call user functions, and the trusted
 base is the compiler, Z3 and the C compiler.
 
-## How AS relates to the nearest designs
+## How Touchmark relates to the nearest designs
 
-| | Vera | Dafny | Verus | AS |
-|---|---|---|---|---|
-| Names | Typed slots `@Int.0` | Names | Names | Names |
-| Contracts | Mandatory | Optional | Optional | Optional; derived obligations always |
-| Contract pinning across versions | No | No | No | Yes |
-| Effects in signatures | Yes | No | No | Yes |
-| Memory model | Wasm GC | GC (target-dependent) | Rust ownership | Value semantics + Perceus RC |
-| Output | Wasm | C#, Java, JS, Go, Python | Native via rustc | Native via C |
-| Tokens on the 4-program corpus | 447 | 249 | 266 | 230 |
+| | Vera | Aver | Dafny | Verus | Touchmark |
+|---|---|---|---|---|---|
+| Names | Typed slots `@Int.0` | Names | Names | Names | Names |
+| Contracts | Mandatory | `verify` blocks are tests; laws exported to Lean | Optional | Optional | Optional; derived obligations always |
+| Who proves them | Z3 in the compiler | Lean, after export | Z3 in the compiler | Z3 in the compiler | Z3 in the compiler |
+| Invariants and private contracts inferred | No | n/a (no loops) | No | No | Yes, and small helpers summarized exactly |
+| Array bounds and overflow proved, checks removed | Not documented | Not documented | Bounds yes; unbounded ints | Yes | Yes |
+| Contract pinning across versions | No | No | No | No | Yes, with an SMT refinement check |
+| Effects in signatures | Yes | Yes | No | No | Yes |
+| Memory model | Wasm GC | VM; Rust or Wasm output | GC (target-dependent) | Rust ownership | Value semantics + Perceus RC |
+| Output | Wasm | Bytecode VM, Rust, Wasm | C#, Java, JS, Go, Python | Native via rustc | Native via C, in the C/Rust speed band |
+| Tokens on the 4-program corpus | 447 | not measured | 249 | 266 | 230 |
+
+Aver (github.com/jasisz/aver, 61 stars in September 2026) is the closest in intent: "designed
+for AI to write and humans to review". Its README says its verify blocks "are never presented as
+proofs"; proofs come from exporting pure code to Lean. It has no loops, no closures and no
+if/else, and it states no performance figures. Orthon (github.com/orthon-lang/docs) is design
+documents only, with no compiler. Warrant (github.com/mv2a/warrant) is a language-agnostic
+protocol: evidence is any command that exits 0, and any change to intent voids approval, with
+no check of whether the change weakened it.
 
 ## Roadmap, evaluation and stop rules
 
@@ -239,14 +251,14 @@ base is the compiler, Z3 and the C compiler.
 2. **v0.2:** heap values with Perceus, generics, modules, `?`, C ABI, `llms.txt` under 25,000
    tokens, and the first agent evaluation. The evaluation avoids the saturation that makes toy
    benchmarks useless: bug-prone modules (money, permissions, parsers), at least a third of the
-   tasks boundary or effect bugs, written by frontier models in AS, Rust and TypeScript, measuring
+   tasks boundary or effect bugs, written by frontier models in Touchmark, Rust and TypeScript, measuring
    escaped defects (hidden tests and mutation), contract weakening, and total agent tokens to a
    passing result.
-   *Exit:* AS matches Rust on task success, uses no more total tokens, and has fewer escaped
+   *Exit:* Touchmark matches Rust on task success, uses no more total tokens, and has fewer escaped
    defects. *Stop or rethink* if agents need more than twice Rust's tokens after two rounds of
    diagnostic and documentation fixes.
 3. **v0.3:** boundaries, taint and FFI; a standard library for files, JSON, HTTP clients and
-   time; `aslang fmt`; an LSP with proof status on hover.
+   time; `tmk fmt`; an LSP with proof status on hover.
    *Exit:* three real modules (a ledger, a policy evaluator, a parser) ported and linked into
    existing C, Rust or Python programs.
 4. **v0.4:** concurrency, a package manager with effect-pinned dependencies, and Wasm.

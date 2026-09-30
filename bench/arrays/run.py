@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Array benchmarks: AS against C, C++, Rust, Go, Java, JavaScript and Python.
+"""Array benchmarks: Touchmark against C, C++, Rust, Go, Java, JavaScript and Python.
 
 Every program implements the same algorithm and must print the same answer. Each language is
 built with its usual release settings. Reports the median wall time, peak memory (RSS) and
@@ -18,7 +18,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-ASLANG = os.environ.get("ASLANG", os.path.join(ROOT, "target", "release", "aslang"))
+TMK = os.environ.get("TMK", os.path.join(ROOT, "target", "release", "tmk"))
 RUNS = int(os.environ.get("RUNS", "5"))
 SLOW_TIMEOUT = int(os.environ.get("SLOW_TIMEOUT", "120"))
 BENCHES = ["sieve", "matmul", "quicksort", "sum"]
@@ -31,7 +31,7 @@ def java_class(b):
 
 # language: (source file pattern, build command or None, run command)
 LANGS = {
-    "AS": ("{b}.as", [ASLANG, "build", "{src}", "-o", "{bin}"], ["{bin}"]),
+    "Touchmark": ("{b}.tmk", [TMK, "build", "{src}", "-o", "{bin}"], ["{bin}"]),
     "C": ("{b}.c", ["gcc", "-O2", "-o", "{bin}", "{src}"], ["{bin}"]),
     "C++": ("{b}.cpp", ["g++", "-O2", "-o", "{bin}", "{src}"], ["{bin}"]),
     "Rust": ("{b}.rs", ["rustc", "-C", "opt-level=3", "-o", "{bin}", "{src}"], ["{bin}"]),
@@ -111,7 +111,7 @@ def main():
                 if r.returncode != 0:
                     rows.append((lang, None, None, None, "build failed"))
                     continue
-                if lang == "AS":
+                if lang == "Touchmark":
                     note = r.stderr.strip().splitlines()[-1].split(":", 1)[-1].strip()
             cmd = fmt(run, **kw)
             slow = lang == "Python"
