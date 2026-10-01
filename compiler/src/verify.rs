@@ -475,6 +475,9 @@ fn infer_contracts(m: &Module, src: &Source, opts: &Options, pre: &str, skip: &H
             fv.warm = std::mem::take(&mut warm);
             fv.run();
             let points: Vec<(usize, String, Vec<String>)> = fv.probes.iter().map(|(_, k, pc, g)| (*k, pc.clone(), g.clone())).collect();
+            // A slow body must not cost its callees their contracts: an unchecked candidate
+            // counts as false and is never offered again. The check has its own time cap.
+            fv.budget_ms = u64::MAX;
             let keep = fv.valid_at(&points);
             warm = std::mem::take(&mut fv.warm);
             last_found.insert(fi, std::mem::take(&mut fv.last_found));
@@ -1719,7 +1722,10 @@ impl<'a> Fv<'a> {
     /// `all_valid` for several program points at once, each knowing only the facts recorded
     /// before it (in order: a later fact may be an assumption that does not hold yet). Scalar and quantified goals go to two
     /// solver processes running side by side: true quantified goals are proved fast and false
-    /// ones rarely get a model, so they get a shorter time limit.
+    /// ones rarely get a model, so they get a shorter time limit. A false goal usually costs its
+    /// whole time limit before `unknown`, so a few of them can use up the cap; the goals the cut
+    /// left unanswered get more passes at 10 ms each, which is enough for the true ones, for as
+    /// long as each pass answers some.
     fn valid_at(&mut self, points: &[(usize, String, Vec<String>)]) -> Vec<Vec<bool>> {
         let mut out: Vec<Vec<bool>> = points.iter().map(|(_, _, g)| vec![false; g.len()]).collect();
         if points.iter().all(|(_, _, g)| g.is_empty()) || self.out_of_budget() {
@@ -1731,7 +1737,7 @@ impl<'a> Fv<'a> {
             base.push('\n');
         }
         let events = &self.events;
-        let script = |quant: bool, limit: u32| {
+        let script = |quant: bool, limit: u32, open: &[Vec<bool>]| {
             let mut s = format!("(set-option :timeout {limit})\n{base}");
             let mut slots = vec![];
             let mut order: Vec<usize> = (0..points.len()).collect();
@@ -1739,7 +1745,7 @@ impl<'a> Fv<'a> {
             let mut asserted = 0;
             for p in order {
                 let (known, pc, goals) = &points[p];
-                let mine: Vec<usize> = (0..goals.len()).filter(|&k| goals[k].contains("(forall") == quant).collect();
+                let mine: Vec<usize> = (0..goals.len()).filter(|&k| goals[k].contains("(forall") == quant && open[p][k]).collect();
                 if mine.is_empty() {
                     continue;
                 }
@@ -1758,17 +1764,28 @@ impl<'a> Fv<'a> {
             }
             (s, slots)
         };
-        let jobs = [script(false, 500), script(true, 150)];
         let z3 = &self.z3;
-        let answers: Vec<Option<Vec<SExp>>> = std::thread::scope(|sc| {
-            let hs: Vec<_> = jobs.iter().map(|(s, slots)| sc.spawn(move || if slots.is_empty() { Some(vec![]) } else { run_z3_capped(z3, s, Some(VALID_CAP_MS)) })).collect();
-            hs.into_iter().map(|h| h.join().ok().flatten()).collect()
-        });
-        for ((_, slots), ans) in jobs.iter().zip(answers) {
-            let Some(ans) = ans else { continue };
-            for (&(p, k), a) in slots.iter().zip(ans) {
-                out[p][k] = matches!(a, SExp::Atom(ref s) if s == "unsat");
+        let mut open: Vec<Vec<bool>> = points.iter().map(|(_, _, g)| vec![true; g.len()]).collect();
+        let (mut scalar, mut quant) = (500, 150);
+        loop {
+            let jobs = [script(false, scalar, &open), script(true, quant, &open)];
+            let answers: Vec<Option<Vec<SExp>>> = std::thread::scope(|sc| {
+                let hs: Vec<_> = jobs.iter().map(|(s, slots)| sc.spawn(move || if slots.is_empty() { Some(vec![]) } else { run_z3_capped(z3, s, Some(VALID_CAP_MS)) })).collect();
+                hs.into_iter().map(|h| h.join().ok().flatten()).collect()
+            });
+            let mut answered = 0;
+            for ((_, slots), ans) in jobs.iter().zip(answers) {
+                let Some(ans) = ans else { continue };
+                for (&(p, k), a) in slots.iter().zip(ans) {
+                    out[p][k] = matches!(a, SExp::Atom(ref s) if s == "unsat");
+                    open[p][k] = false;
+                    answered += 1;
+                }
             }
+            if answered == 0 || open.iter().all(|g| g.iter().all(|&v| !v)) {
+                break;
+            }
+            (scalar, quant) = (10, 10);
         }
         out
     }

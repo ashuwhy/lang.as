@@ -207,6 +207,14 @@ fn contracts_of_private_functions_are_inferred_from_their_calls() {
 }
 
 #[test]
+fn a_slow_caller_keeps_the_contracts_it_establishes() {
+    let dir = scratch("slow_caller", include_str!("slow_caller.tmk"));
+    let (code, _, err) = tmk(&["check", "--show-inferred", "slow_caller.tmk"], &dir);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("requires x <= 1_000_000_000"), "{err}");
+}
+
+#[test]
 fn small_helpers_are_summarized_exactly() {
     let grid = std::fs::read_to_string(root().join("examples/grid.tmk")).unwrap();
     // Off by one inside the helper: the index it computes is out of bounds at the call.

@@ -1,0 +1,44 @@
+// An interval DP whose body is slow to verify: its many false candidate preconditions for
+// `gap` each cost a full solver timeout. The true ones (both arguments in 0..=1e9) must still
+// be inferred, or `gap` overflows.
+
+fn gap(x: int, y: int) -> int {
+  if x > y { x - y } else { y - x }
+}
+
+pub fn spread(pts: [int]) -> int
+  requires 1 <= pts.len && pts.len <= 1_500
+  requires forall i in 0..pts.len: 0 <= pts[i] && pts[i] <= 1_000_000_000
+{
+  let m = pts.len
+  var f = [0; m]
+  var g = [0; m]
+  for len in 2..m + 1
+    invariant f.len == m && g.len == m
+    invariant forall t in 0..m: 0 <= f[t] && f[t] <= 4_000_000_000_000_000_000
+    invariant forall t in 0..m: 0 <= g[t] && g[t] <= 4_000_000_000_000_000_000
+  {
+    let left = m - len + 1
+    var nf = [0; m]
+    var ng = [0; m]
+    for l in 0..m - len + 1
+      invariant forall t in 0..m: 0 <= nf[t] && nf[t] <= 4_000_000_000_000_000_000
+      invariant forall t in 0..m: 0 <= ng[t] && ng[t] <= 4_000_000_000_000_000_000
+    {
+      let r = l + len - 1
+      var a = f[l + 1] + gap(pts[l + 1], pts[l]) * left
+      let b = g[l + 1] + gap(pts[r], pts[l]) * left
+      if b < a { a = b }
+      if a > 4_000_000_000_000_000_000 { a = 4_000_000_000_000_000_000 }
+      nf[l] = a
+      var c = g[l] + gap(pts[r], pts[r - 1]) * left
+      let e = f[l] + gap(pts[r], pts[l]) * left
+      if e < c { c = e }
+      if c > 4_000_000_000_000_000_000 { c = 4_000_000_000_000_000_000 }
+      ng[l] = c
+    }
+    f = nf
+    g = ng
+  }
+  if g[0] < f[0] { g[0] } else { f[0] }
+}
