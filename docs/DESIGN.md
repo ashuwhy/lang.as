@@ -204,14 +204,15 @@ from the same checked IR.
 | Diagnostics as instructions, in text and JSON; `tmk explain` | yes |
 | Named arguments checked against parameter names | yes |
 | Proved facts passed to the C optimiser; proved-safe 32-bit and unsigned division | yes |
-| `llms.txt`: the complete reference (3,225 tokens at v0.2) | yes |
+| `llms.txt`: the complete reference (2,688 tokens at v0.2, down from 3,225 after round 1) | yes |
 | Arrays with proved bounds, reference counting, copy-on-write, last-use moves; `for` loops; `forall`/`exists` | done (v0.2) |
 | Loop-invariant inference (Houdini over templates; inferred invariants are re-proved) | done (v0.2) |
 | Contract inference for private functions (Houdini across the module: `requires` from call sites, `ensures` from returns; re-proved) | done (v0.2) |
 | Exact summaries of small private helpers (no loops, no recursion): callers see the value the body computes | done (v0.2) |
 | `tmk examples`: allowed, forbidden and rejected calls from solver models, and a proof of whether a contract decides the result | done (v0.2) |
+| `i128`; `sum` in contracts; sortedness in any written form, checked in one pass at run time and inferred for arrays built by `push`; nonlinear checks retried in a fresh solver (all from the round 1 agent evaluation) | done (v0.2) |
 | Strings, maps, arrays inside other values, recursive enums | v0.2/v0.3 |
-| Generics, modules, `?`, sized integers, recursion termination | v0.2 |
+| Generics, modules, `?`, integer types besides `int` and `i128`, recursion termination | v0.2 |
 | C ABI export (`.h` + static library) and import through `uses ffi` | v0.2 |
 | `Untrusted<T>` decoders, taint sinks, capabilities as values | v0.3 |
 | Concurrency (structured, message passing of immutable values) | v0.4 |

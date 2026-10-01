@@ -1,153 +1,140 @@
 # Touchmark language reference (v0.2)
 
-> Touchmark is a compiled, memory-safe language. Functions carry contracts that an SMT solver proves
-> at compile time; proved checks cost nothing at run time. This file is the complete reference
-> for what the current compiler accepts. Read it before writing Touchmark.
+> A compiled, memory-safe language. Functions carry contracts that the Z3 solver proves at
+> compile time; proved checks cost nothing at run time. This file is everything the compiler accepts.
 
 ## Workflow
 
-1. Write `file.tmk`.
-2. Run `tmk check file.tmk --json`. Fix every error; each has a `fix` and often a
-   `counterexample` (concrete inputs that break the check). `tmk explain <code>` explains any code.
-3. Done when it prints `ok ... N checks proved, 0 kept at run time`. Do not keep editing code that
-   is proved.
-4. `tmk run file.tmk` builds a native binary and runs it; `tmk build file.tmk -o out` keeps it.
-5. `tmk lock file.tmk` pins public contracts in `touchplate.lock`. Never weaken a pinned contract to
-   make a check pass: fix the code instead. Weakening is an error (E0301) until a human re-pins.
+- `tmk check f.tmk` proves. `tmk run f.tmk` proves, builds and runs `main`. `tmk build f.tmk -o out`
+  keeps the binary. Read the plain text output; `--json` says the same in twice the tokens.
+- Every error has a code, a `fix` and usually a `counterexample`: inputs that break the check.
+  `tmk explain E0204` explains a code.
+- Done when it prints `N checks proved, 0 kept at run time`. Stop editing proved code.
+- A proved `ensures` holds for every input the `requires` allow, so a test of it adds nothing.
+  Write the specification itself as `ensures` (the exact result, not only a range) and let the
+  proof replace your tests. Test only what no contract states, such as printed output.
+- `tmk examples f.tmk --fn name` prints calls a contract allows, results it forbids, inputs each
+  `requires` rejects, and `decided` (one allowed result per input) or `open`. Use it to see whether
+  a contract says what you mean.
+- W0250 means not proved within the time budget; the check stays at run time. Usually an
+  `invariant` or `requires` is missing.
+- `tmk lock f.tmk` pins public contracts in `touchplate.lock`. Never weaken a pinned contract to
+  make a check pass: that is error E0301 until a human re-pins.
 
-## Lexical rules
+## Syntax
 
-- A newline ends a statement. A line continues if it ends with an operator, `,` or an open
-  bracket, or the next line starts with an operator, `.`, `)`, `else`, or a contract keyword.
-- Comments: `// line` and `/* block */`. Braces delimit blocks; indentation is not significant.
-- Integer literals: `42`, `1_000_000`, `0xff`. Strings: `"text\n"` (only as `io.print` arguments in v0.1).
-- Keywords: fn pub type enum let var if else match while for in return requires ensures
-  invariant decreases uses where true false is forall exists.
+- A newline ends a statement, unless the line ends with an operator, `,` or an open bracket, or the
+  next starts with an operator, `.`, `)`, `else` or a contract keyword.
+- `// line`, `/* block */`. Braces delimit blocks. Literals `42`, `1_000_000`, `0xff`, `"text\n"`
+  (strings only as `io.print` arguments).
+- Reserved: fn pub type enum let var if else match while for in return requires ensures invariant
+  decreases uses where true false is forall exists.
 
 ## Types
 
 | Type | Meaning |
 |---|---|
-| `int` | 64-bit signed integer. Constants `int.min`, `int.max` |
+| `int` | 64-bit signed. `int.min`, `int.max` |
+| `i128` | 128-bit signed. `i128(x)` widens an `int`; `int(x)` narrows, and must be proved to fit |
 | `nat` | `int where it >= 0` |
 | `bool` | `true`, `false` |
-| `T?` | `Option<T>`: `Some(x)` or `None` |
-| `[T]` | array of `T` (value semantics: assignment copies, but only when the copy is later written) |
+| `T?` | `Some(x)` or `None` |
+| `[T]` | array (value semantics; copied only when a shared copy is written) |
 | `Result<T, E>` | `Ok(x)` or `Err(e)` |
-| `type Name = { f: T, g: U }` | a record type (must be named) |
-| `type Name = T where <pred>` | a refinement: `T` values for which `pred` holds; `it` is the value |
-| `enum Name { A, B(x: T, y: U) }` | a tagged union; variant names are global and unique |
+| `type Name = { f: T, g: U }` | record (must be named) |
+| `type Name = T where <pred>` | refinement; `it` is the value |
+| `enum Name { A, B(x: T, y: U) }` | tagged union; variant names are global |
 
-There is no null, no implicit conversion, no exceptions, and no references. Assignment copies.
-
-```tmk
-type Cents = int where 0 <= it && it <= 1_000_000_000_000
-type Account = { id: int, balance: Cents, frozen: bool }
-enum TransferError { Frozen, Insufficient(short: Cents) }
-```
+No null, no exceptions, no references, no implicit conversions: `int` and `i128` do not mix in
+code (a literal takes the other side's type). Assignment copies.
 
 ## Functions
 
 ```tmk
 pub fn name(a: int, b: Account) -> int
-  requires a >= 0            // caller must guarantee (checked at every call site)
-  ensures result >= a        // function guarantees; `result` is the return value
+  requires a >= 0            // checked at every call site
+  ensures result >= a        // `result` is the return value
   uses io                    // effects; omit for a pure function
 {
   a + 1                      // the last expression is the return value
 }
 ```
 
-- `pub` marks a function as part of the module's contract (pinned by `tmk lock`).
-- A private function (no `pub`) may omit its contracts: the compiler infers `requires` from
-  its call sites (bounds, lengths, relations between parameters, element ranges) and `ensures`
-  from its returns, then proves them like written ones. A small private helper with no loops
-  and no recursion needs no `ensures` at all: callers see exactly the value it computes. Write
-  contracts on `pub` functions, and on private ones only to state intent. `--show-inferred`
-  lists what was inferred.
-- Contracts are optional. Every function still gets overflow, division, refinement and
-  exhaustiveness checks.
-- `fn main() uses io { ... }` is the program entry point.
-- Calls: `f(1, x)`, or with labels `f(a: 1, b: x)`. Labels must match the parameter names in
-  order, so swapped arguments are a compile error. Prefer labels when parameters share a type.
-- Effects: `io`, `fs`, `net`, `clock`, `rand`, `env`, `ffi`. A function may only call functions
-  whose effects it also declares. v0.1 provides `io.print(a, b, ...)` for ints, bools and strings.
+- `pub` functions are the module's contract. Write contracts on them.
+- A private function may omit contracts: its `requires` are inferred from its call sites and its
+  `ensures` from its returns. Callers of a small helper with no loops see exactly what it
+  computes. `--show-inferred` lists what was inferred.
+- Every function gets overflow, division, index, refinement and exhaustiveness checks.
+- `fn main() uses io { ... }` is the entry point.
+- Calls: `f(1, x)` or `f(a: 1, b: x)`. Labels must match the parameters in order, so swapped
+  arguments do not compile.
+- Effects: `io fs net clock rand env ffi`. A function calls only functions whose effects it
+  declares. `io.print(a, b, ...)` prints ints, bools and strings.
 
 ## Statements and expressions
 
 ```tmk
-let x = 1               // immutable binding; type inferred
-let y: Cents = 5        // annotated
-var i = 0               // mutable local
-i = i + 1               // also i += 1, i -= 1, i *= 2
-return x                // early return
+let x = 1                  // immutable; `let y: Cents = 5` annotated
+var i = 0                  // mutable; i = i + 1, i += 1, i -= 1, i *= 2
+return x
 
 if a < b { a } else { b }             // if is an expression
-match r {                              // must cover every case
+match r {                             // must cover every case
   Ok(m) => m.balance
   Err(Insufficient(s)) => s
   Err(Frozen) => 0
 }
-{ ...acct, balance: 0 }                // copy a record with fields changed
-{ id: 1, balance: 0, frozen: false }   // record literal (type inferred from fields)
+{ ...acct, balance: 0 }               // record copy with fields changed
+{ id: 1, balance: 0, frozen: false }  // record literal
 
 while i < n
-  invariant 0 <= i && i <= n           // must hold before and after every iteration
-  decreases n - i                      // optional: proves the loop ends
+  invariant i <= n                    // holds before and after every iteration
+  decreases n - i                     // optional: proves the loop ends
 {
   i += 1
 }
+for i in 0..a.len { s += a[i] }       // i = lo..hi-1; bounds and termination automatic
 
-for i in 0..a.len {                    // i runs lo..hi-1; bounds and termination are automatic
-  s += a[i]
-}
-
-let a = [1, 2, 3]                      // array literal
-var b = [0; n]                         // n copies of 0
-b[i] = 5                               // also b[i] += 1; needs `var`
-b.push(7)                              // append; needs `var`
-a.len                                  // length
+let a = [1, 2, 3]
+var b = [0; n]                        // n zeros; `var c: [int] = []` empty
+b[i] = 5                              // needs `var`
+b.push(7)                             // needs `var`
+a.len
 ```
 
-- Operators: `+ - * / %` (ints; `/` and `%` truncate toward zero), `== != < <= > >=`,
-  `&& || !`, and `==>` (implies).
-- `x is Pattern` tests a pattern and binds its names on the true side of `&&`, `==>` and in an
-  `if` body: `if r is Ok(m) { m.balance } else { 0 }`.
-- Patterns: `_`, a name, a literal, `Variant`, `Variant(p1, p2)`, `Some(p)`, `None`, `Ok(p)`, `Err(p)`.
-- A `Result` value may not be silently dropped; handle it with `match`.
-- In code, `==` compares ints and bools. Contracts may compare any values.
-- Arrays may be variables, parameters and return values, but not stored inside records, enums,
-  options or other arrays (v0.2). Passing an array and returning it (`a = f(a)`) does not copy.
+- `+ - * / %` (`/` and `%` truncate toward zero: `-7 % 3 == -1`), `== != < <= > >=`, `&& || !`,
+  `==>` (implies).
+- `x is Pattern` binds names on the true side of `&&`, `==>` and in an `if`:
+  `if r is Ok(m) { m.balance } else { 0 }`. Patterns: `_`, name, literal, `V`, `V(p, q)`,
+  `Some(p)`, `None`, `Ok(p)`, `Err(p)`.
+- A `Result` must be handled, not dropped. In code `==` compares numbers and bools; contracts
+  compare any values.
+- Arrays may be locals, parameters and results, not fields of records, enums, options or arrays.
+  `a = f(a)` does not copy.
 
 ## Contracts and proofs
 
-- Contract expressions (`requires`, `ensures`, `invariant`, `decreases`, `where`) use
-  mathematical integers, so `a + b <= int.max` means what it says. They may not call functions
-  or perform effects. They may use `forall i in lo..hi: P` and `exists i in lo..hi: P`.
-- Every `a[i]` must be proved in bounds (E0210). `for i in 0..a.len` proves it for you. After a
-  loop that only writes elements (no `push`), the array's length is still known.
-- Code arithmetic is 64-bit: every `+ - *` must be proved not to overflow, every `/ %` to have a
-  non-zero divisor. Bound inputs with `requires` or refinement types to make this provable.
-- Calls are checked modularly: the callee's `requires` must hold at the call; afterwards only its
-  `ensures` (written or inferred) is known about the result. On a `pub` function, state in
-  `ensures` everything callers need.
-- A loop is known only through its invariants: after the loop, they and the negated condition
-  are all that is known. The compiler infers simple invariants itself (ranges of counters,
-  accumulators like `s <= i * 1_000`, values kept in range by `%`, element ranges of arrays), so
-  write an `invariant` only for what it cannot guess: the property you actually care about, such
-  as `forall i in 0..lo: a[i] < key` or `2 * total == i * (i + 1)`. `tmk check
-  --show-inferred` lists what was inferred. Do not add invariants the compiler already infers.
-- `tmk examples file.tmk [--fn name]` shows what each contract means: an allowed call and
-  result, results it forbids, inputs each `requires` rejects, and either `decided` (every
-  input has exactly one allowed result) or `open` (two allowed results for the same input).
-  An `open` result you did not intend means an `ensures` is missing. `tmk lock` notes
-  every public contract it pins that is `open`.
-- Verdicts: proved (no run-time cost), refuted (compile error with a counterexample), unknown
-  (warning W0250; a run-time check is kept). `--proved` rejects unknowns.
-- Recursive functions are checked for partial correctness; termination of recursion is not yet
-  proved.
+- `requires`, `ensures`, `invariant`, `decreases` and `where` use mathematical integers
+  (`a + b <= int.max` means what it says), cannot call functions, and may use
+  `forall i in lo..hi: P`, `exists i in lo..hi: P` and `sum j in lo..hi: e` (0 when `lo >= hi`).
+- `/`, `%` and products of variables are fine in contracts:
+  `ensures result == ((head + offset) % cap + cap) % cap` is proved.
+- Code arithmetic is checked: `+ - *` must be proved not to overflow `int` (or `i128`), `/ %`
+  to have a non-zero divisor, `a[i]` to be in bounds. Bound inputs with `requires` or refinements.
+  The exact sum of `int` values fits in `i128`: accumulate `s += i128(a[i])`.
+- Sorted input: `requires forall i in 1..a.len: a[i - 1] <= a[i]` (or `<`). The prover knows it
+  implies every pair `i < j`; all-pairs forms work too. A caller that builds the array with `push`
+  in order gets it proved; kept at run time it is one pass over the array.
+- Calls are modular: the callee's `requires` must hold at the call, and afterwards only its
+  `ensures` are known. State in a `pub` function's `ensures` everything callers need.
+- After a loop only its invariants and the negated condition are known. Counter ranges,
+  accumulator bounds, element ranges and sortedness of pushed arrays are inferred.
+  Write an `invariant` only for the property you care about, such as
+  `forall i in 0..lo: a[i] < key` or `s == sum j in 0..i: a[j]`.
+- Verdicts: proved (free at run time), refuted (error with a counterexample), unknown (W0250, kept
+  at run time). `--proved` rejects unknowns. Recursion is checked for partial correctness only.
 
-## Complete example
+## Example
 
 ```tmk
 type Cents = int where 0 <= it && it <= 1_000_000_000_000
@@ -158,8 +145,7 @@ enum TransferError { Frozen, Insufficient(short: Cents) }
 pub fn transfer(from: Account, to: Account, amount: Cents) -> Result<Moved, TransferError>
   requires from.id != to.id
   requires to.balance + amount <= 1_000_000_000_000
-  ensures result is Ok(m) ==> m.from.balance == from.balance - amount
-  ensures result is Ok(m) ==> m.to.balance == to.balance + amount
+  ensures result is Ok(m) ==> m.from.balance == from.balance - amount && m.to.balance == to.balance + amount
   ensures (result is Err(Frozen)) == (from.frozen || to.frozen)
 {
   if from.frozen || to.frozen { return Err(Frozen) }
@@ -168,40 +154,34 @@ pub fn transfer(from: Account, to: Account, amount: Cents) -> Result<Moved, Tran
        to:   { ...to,   balance: to.balance + amount } })
 }
 
-pub fn search(a: [int], key: int) -> int
-  requires forall i in 0..a.len: forall j in i..a.len: a[i] <= a[j]
-  ensures result == -1 || (0 <= result && result < a.len && a[result] == key)
-  ensures result == -1 ==> forall i in 0..a.len: a[i] != key
+pub fn lower_bound(a: [int], key: int) -> int
+  requires forall i in 1..a.len: a[i - 1] <= a[i]
+  ensures 0 <= result && result <= a.len
+  ensures forall i in 0..result: a[i] < key
+  ensures forall i in result..a.len: a[i] >= key
 {
   var lo = 0
   var hi = a.len
   while lo < hi
-    invariant 0 <= lo && lo <= hi && hi <= a.len
     invariant forall i in 0..lo: a[i] < key
-    invariant forall i in hi..a.len: a[i] > key
-    decreases hi - lo
+    invariant forall i in hi..a.len: a[i] >= key
   {
     let mid = lo + (hi - lo) / 2
-    if a[mid] < key { lo = mid + 1 } else if a[mid] > key { hi = mid } else { return mid }
-  }
-  -1
-}
-
-pub fn isqrt(n: int) -> int
-  requires 0 <= n && n <= 1_000_000_000_000
-  ensures result * result <= n && n < (result + 1) * (result + 1)
-{
-  var lo = 0
-  var hi = 1_000_001
-  while hi - lo > 1
-    invariant 0 <= lo && lo < hi && hi <= 1_000_001
-    invariant lo * lo <= n && n < hi * hi
-    decreases hi - lo
-  {
-    let mid = lo + (hi - lo) / 2
-    if mid * mid <= n { lo = mid } else { hi = mid }
+    if a[mid] < key { lo = mid + 1 } else { hi = mid }
   }
   lo
+}
+
+pub fn total(a: [int]) -> i128
+  ensures result == sum j in 0..a.len: a[j]
+{
+  var s: i128 = 0
+  for i in 0..a.len
+    invariant s == sum j in 0..i: a[j]
+  {
+    s += i128(a[i])
+  }
+  s
 }
 
 fn main() uses io {
@@ -211,22 +191,16 @@ fn main() uses io {
     Ok(m) => io.print("moved, new balance:", m.to.balance)
     Err(e) => io.print("transfer failed")
   }
-  io.print(isqrt(99), search([1, 3, 5, 7], 5))
+  var xs: [int] = []
+  for i in 0..10 {
+    xs.push(i * 3)
+  }
+  io.print(lower_bound(xs, 10), total([int.max, int.max]))
 }
 ```
 
 ## Not yet in the language
 
 Strings as values, maps, arrays inside other values, recursive types, generics, modules, `?`,
-closures, sized integers, floats, the standard library beyond `io.print`, and FFI. Do not write
-them; the compiler will reject them. They are planned (see `docs/DESIGN.md`).
-
-## Diagnostic codes
-
-E0001 lexing, E0002 syntax, E0101 unknown name, E0102 type mismatch, E0103 field, E0104
-non-exhaustive match, E0105 cannot infer type, E0106 effect not declared, E0107 argument count,
-E0108 not allowed in contract, E0109 duplicate, E0110 recursive type, E0111 not `var`, E0112
-unnamed record type, E0113 bad main, E0114 ignored Result, E0115 literal range, E0116 comparison,
-E0117 argument label, E0118 array inside a value, E0201 overflow, E0202 division by zero, E0203 callee precondition, E0204
-postcondition, E0205 refinement, E0206/E0207 loop invariant, E0208 loop measure, E0209 vacuous
-precondition, E0210 index out of bounds, E0211 array length, E0301-E0305 contract lock, W0250 kept at run time, W0251 no solver.
+closures, floats, integer types besides `int` and `i128`, a standard library beyond `io.print`,
+FFI. The compiler rejects them.

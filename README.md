@@ -79,6 +79,7 @@ Each line below is a test in `compiler/tests/cli.rs`.
 | A pinned function gains an effect | `E0303` |
 | `while j <= n` writing `composite[j]` in a sieve | `E0210` index may be out of bounds |
 | An unsorted array passed to a binary search that requires sorted input | `E0203`, at the call |
+| A sliding-window sum whose invariant covers one element too many | `E0206`, with `sum` in the invariant |
 
 ## Speed
 
@@ -112,7 +113,7 @@ versions, and all seven together are within 18% of Rust (`bench/arrays/RESULTS.m
 
 ## Built for models as well as people
 
-- **The whole language fits in 3,225 tokens.** [`llms.txt`](llms.txt) is the complete
+- **The whole language fits in 2,688 tokens.** [`llms.txt`](llms.txt) is the complete
   reference; a model that reads it can write Touchmark.
 - **Short.** On four small programs with identical proved contracts, Touchmark takes 230 tokens against
   Dafny's 249, Verus's 266 and Vera's 447 (`bench/tokens/`).
@@ -148,6 +149,13 @@ The hypothesis that Touchmark lowers token cost is not supported. The runs also 
 language gets in the way (sortedness preconditions nobody could use, modulo contracts that would not
 prove, no sums in contracts), and those drive round 2, which needs harder tasks.
 
+Since then I fixed those findings. Sortedness can be written over adjacent pairs or all pairs, a caller
+that builds its array with `push` proves it, and a kept check is one pass. Contracts can use
+`sum j in lo..hi: e`, `i128` holds exact sums, and the natural `ring_index` contract
+`result == ((head + offset) % cap + cap) % cap` is proved. The reference shrank from 3,225 to 2,688
+tokens and now tells agents that a proved `ensures` replaces their tests. Whether any of this
+changes the outcome is for round 2 to measure.
+
 ## Use it
 
 Requires Rust (to build the compiler), a C compiler (gcc or clang) and `z3` on `PATH`.
@@ -165,10 +173,10 @@ cargo test                                            # end-to-end tests
 
 ## Status: v0.2 in progress
 
-Working: integers with proved overflow safety, booleans, records, enums, `Option`, `Result`,
+Working: `int` and `i128` with proved overflow safety, booleans, records, enums, `Option`, `Result`,
 refinement types, arrays with proved bounds (reference-counted, copy-on-write, moved on last
 use, so passing and returning arrays does not copy), `for` loops with automatic termination
-proofs, `forall`/`exists` in contracts, functions, `let`/`var`, `if`/`match`/`while`,
+proofs, `forall`/`exists`/`sum` in contracts, functions, `let`/`var`, `if`/`match`/`while`,
 `requires`/`ensures`/`invariant`/`decreases`, inference of loop invariants and of private
 functions' contracts, effects, named arguments, the contract lock, and native binaries through C. Not yet: strings as values, arrays inside other values, generics,
 modules, a standard library beyond `io.print`, FFI, concurrency, and proof of termination for

@@ -38,6 +38,14 @@ fn verified_examples_run() {
         assert!(out.contains(expect), "{file}: {out}");
         assert!(err.contains("0 kept at run time"), "{file}: {err}");
     }
+    // The example agents learn the language from.
+    let reference = example("llms.txt");
+    let start = reference.find("## Example\n\n```tmk\n").expect("llms.txt has an example") + "## Example\n\n```tmk\n".len();
+    let program = &reference[start..start + reference[start..].find("```").unwrap()];
+    let (code, out, err) = tmk(&["run", "reference.tmk"], &scratch("reference", program));
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "moved, new balance: 30\n4 18446744073709551614\n");
+    assert!(err.contains("0 kept at run time"), "{err}");
 }
 
 fn expect_error(name: &str, src: &str, code: &str) {
